@@ -5,7 +5,7 @@
 This page tracks bootstrap decisions for readme during bootstrap push work.
 
 ## Usage
-- Rewrote the evidence explanation around the maintained behavior.
+- Made the workflows assumptions easier to check later.
 
 ## Scratch Notes
 Early notes are still uneven and may be folded into clearer sections later.

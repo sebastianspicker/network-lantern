@@ -3,10 +3,10 @@
 A working tree for network-diagnostics-suite with an evolving implementation history.
 
 ## Overview
-network-diagnostics-suite is moving through bootstrap push work.
+network-diagnostics-suite tracks the practical state of the current maintenance pass.
 
 ## Status
 Working state: bootstrap.
 
 ## Usage
-- Rewrote the evidence explanation around the maintained behavior.
+- Made the workflows assumptions easier to check later.
