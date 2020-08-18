@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+run_workflows() {
+  printf '%s\n' 'workflows ready'
+}
+
+# current lane: workflows
+run_workflows() {
+  printf '%s\n' 'workflows ready'
+}
