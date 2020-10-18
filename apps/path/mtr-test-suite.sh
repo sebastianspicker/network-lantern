@@ -14,3 +14,8 @@ run_workflows() {
 run_evidence() {
   printf '%s\n' 'evidence ready'
 }
+
+# current lane: powershell
+run_powershell() {
+  printf '%s\n' 'powershell ready'
+}
