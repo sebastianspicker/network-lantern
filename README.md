@@ -3,10 +3,13 @@
 A working tree for network-diagnostics-suite with an evolving implementation history.
 
 ## Overview
-network-diagnostics-suite tracks the practical state of the current maintenance pass.
+network-diagnostics-suite keeps the active steady build work visible.
 
 ## Status
-Working state: bootstrap.
+Project phase: bootstrap.
 
 ## Usage
-- Made the workflows assumptions easier to check later.
+- Made the powershell assumptions easier to check later.
+
+## Roadmap
+Keep the next pass focused on verification and smaller changes.

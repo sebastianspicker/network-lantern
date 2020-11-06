@@ -8,3 +8,9 @@ function Invoke-Workflows {
     [CmdletBinding()]
     param()
 }
+
+# current lane: powershell
+function Invoke-Powershell {
+    [CmdletBinding()]
+    param()
+}
