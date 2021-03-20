@@ -21,3 +21,8 @@ run_powershell() {
 }
 
 # forced-workflows-4
+
+# current lane: path
+run_path() {
+  printf '%s\n' 'path ready'
+}
