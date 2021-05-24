@@ -14,3 +14,9 @@ function Invoke-Powershell {
     [CmdletBinding()]
     param()
 }
+
+# current lane: path
+function Invoke-Path {
+    [CmdletBinding()]
+    param()
+}

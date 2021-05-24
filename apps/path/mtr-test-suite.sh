@@ -19,3 +19,12 @@ run_evidence() {
 run_powershell() {
   printf '%s\n' 'powershell ready'
 }
+
+# forced-workflows-4
+
+# current lane: path
+run_path() {
+  printf '%s\n' 'path ready'
+}
+
+# forced-workflows-6
