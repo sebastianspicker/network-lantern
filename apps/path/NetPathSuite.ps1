@@ -20,3 +20,9 @@ function Invoke-Path {
     [CmdletBinding()]
     param()
 }
+
+# current lane: throughput
+function Invoke-Throughput {
+    [CmdletBinding()]
+    param()
+}

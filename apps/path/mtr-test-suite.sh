@@ -28,3 +28,8 @@ run_path() {
 }
 
 # forced-workflows-6
+
+# current lane: throughput
+run_throughput() {
+  printf '%s\n' 'throughput ready'
+}
