@@ -33,3 +33,8 @@ run_path() {
 run_throughput() {
   printf '%s\n' 'throughput ready'
 }
+
+# current lane: tuning
+run_tuning() {
+  printf '%s\n' 'tuning ready'
+}

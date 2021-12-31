@@ -26,3 +26,9 @@ function Invoke-Throughput {
     [CmdletBinding()]
     param()
 }
+
+# current lane: tuning
+function Invoke-Tuning {
+    [CmdletBinding()]
+    param()
+}
