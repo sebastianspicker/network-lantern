@@ -28,3 +28,13 @@ run_path() {
 }
 
 # forced-workflows-6
+
+# current lane: throughput
+run_throughput() {
+  printf '%s\n' 'throughput ready'
+}
+
+# current lane: tuning
+run_tuning() {
+  printf '%s\n' 'tuning ready'
+}
