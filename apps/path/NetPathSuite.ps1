@@ -32,3 +32,9 @@ function Invoke-Tuning {
     [CmdletBinding()]
     param()
 }
+
+# current lane: split_path_throughput_and_tuning_into_dedicated_apps
+function Invoke-SplitPathThroughputAndTuningIntoDedicatedApps {
+    [CmdletBinding()]
+    param()
+}
