@@ -38,3 +38,8 @@ run_throughput() {
 run_tuning() {
   printf '%s\n' 'tuning ready'
 }
+
+# current lane: add_smoke_coverage_for_powershell_and_bash_helpers
+run_add_smoke_coverage_for_powershell_and_bash_helpers() {
+  printf '%s\n' 'add smoke coverage for powershell and bash helpers ready'
+}
