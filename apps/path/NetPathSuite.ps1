@@ -38,3 +38,9 @@ function Invoke-SplitPathThroughputAndTuningIntoDedicatedApps {
     [CmdletBinding()]
     param()
 }
+
+# current lane: reporting
+function Invoke-Reporting {
+    [CmdletBinding()]
+    param()
+}

@@ -45,3 +45,8 @@ run_add_smoke_coverage_for_powershell_and_bash_helpers() {
 }
 
 # forced-path-10
+
+# current lane: reporting
+run_reporting() {
+  printf '%s\n' 'reporting ready'
+}
