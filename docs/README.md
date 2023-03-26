@@ -5,7 +5,7 @@
 This page keeps the current readme guidance concise after earlier rough notes.
 
 ## Usage
-- Made the throughput assumptions easier to check later.
+- Merged scattered throughput guidance into the docs.
 
 - Earlier scratch notes were compressed into the current guidance.
 
