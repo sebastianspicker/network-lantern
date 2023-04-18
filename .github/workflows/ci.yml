@@ -1,0 +1,11 @@
+name: verify
+on:
+  push:
+    branches: [dev]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git status --short
+github-actions: core-build-out
