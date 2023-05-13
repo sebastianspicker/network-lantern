@@ -5,7 +5,7 @@
 This page keeps the current documentation guidance concise after earlier rough notes.
 
 ## Usage
-- Made the throughput assumptions easier to check later.
+- Rewrote the github actions explanation around the maintained behavior.
 
 - Earlier scratch notes were compressed into the current guidance.
 
