@@ -44,3 +44,9 @@ function Invoke-Reporting {
     [CmdletBinding()]
     param()
 }
+
+# current lane: pester
+function Invoke-Pester {
+    [CmdletBinding()]
+    param()
+}
