@@ -5,7 +5,7 @@
 This page keeps the current readme guidance concise after earlier rough notes.
 
 ## Usage
-- Rewrote the pester explanation around the maintained behavior.
+- Rewrote the architecture explanation around the maintained behavior.
 
 - Earlier scratch notes were compressed into the current guidance.
 
