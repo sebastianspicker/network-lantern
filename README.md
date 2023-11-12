@@ -3,13 +3,15 @@
 A working tree for network-diagnostics-suite with an evolving implementation history.
 
 ## Overview
-network-diagnostics-suite keeps the active steady build work visible.
+network-diagnostics-suite keeps setup, verification, and known limitations in one place.
 
 ## Status
-Project phase: bootstrap.
+Lifecycle stage: core-build-out. The useful early notes have been carried forward.
 
 ## Usage
-- Made the powershell assumptions easier to check later.
+- Merged scattered true guidance into the docs.
 
-## Roadmap
+- The older setup fragments have been reduced to the useful parts.
+
+## Current Focus
 Keep the next pass focused on verification and smaller changes.
