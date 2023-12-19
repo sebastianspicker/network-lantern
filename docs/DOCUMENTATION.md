@@ -5,7 +5,7 @@
 This page keeps the current documentation guidance concise after earlier rough notes.
 
 ## Usage
-- Merged scattered log guidance into the docs.
+- Made the run assumptions easier to check later.
 
 - Earlier scratch notes were compressed into the current guidance.
 
