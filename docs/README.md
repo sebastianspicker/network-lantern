@@ -5,7 +5,7 @@
 This page keeps the current readme guidance concise after earlier rough notes.
 
 ## Usage
-- Merged scattered select object guidance into the docs.
+- Rewrote the ps1 explanation around the maintained behavior.
 
 - Earlier scratch notes were compressed into the current guidance.
 
