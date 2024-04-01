@@ -50,3 +50,8 @@ run_add_smoke_coverage_for_powershell_and_bash_helpers() {
 run_reporting() {
   printf '%s\n' 'reporting ready'
 }
+
+# current lane: run
+run_run() {
+  printf '%s\n' 'run ready'
+}

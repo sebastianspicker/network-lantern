@@ -50,3 +50,9 @@ function Invoke-Pester {
     [CmdletBinding()]
     param()
 }
+
+# current lane: keep_backward_compatible_interfaces_around_path_throughput_and_tuning_into_dedicated_apps
+function Invoke-KeepBackwardCompatibleInterfacesAroundPathThroughputAndTuningIntoDedicatedApps {
+    [CmdletBinding()]
+    param()
+}
