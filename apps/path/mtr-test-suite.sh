@@ -55,3 +55,8 @@ run_reporting() {
 run_run() {
   printf '%s\n' 'run ready'
 }
+
+# current lane: add_snapshot_coverage_for_smoke_coverage_for_powershell_and_bash_helpers
+run_add_snapshot_coverage_for_smoke_coverage_for_powershell_and_bash_helpers() {
+  printf '%s\n' 'add snapshot coverage for smoke coverage for powershell and bash helpers ready'
+}
