@@ -1,12 +1,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# reporting entrypoint
+# true entrypoint
 
-# current lane: reporting
-function Invoke-Reporting {
+# current lane: true
+function Invoke-True {
     [CmdletBinding()]
     param()
 }
-
-# forced-reporting-2
