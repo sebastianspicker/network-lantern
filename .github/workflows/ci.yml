@@ -9,3 +9,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: git status --short
 github-actions: core-build-out
+normalize-python-setup-a: expansion
