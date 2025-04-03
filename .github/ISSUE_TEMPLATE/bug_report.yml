@@ -4,3 +4,4 @@ github-actions: core-build-out
 add-snapshot-coverage-fo: expansion
 add-regression-cases-aft: expansion
 run: publication
+true: publication
