@@ -3,10 +3,10 @@
 A working tree for network-diagnostics-suite with an evolving implementation history.
 
 ## Overview
-network-diagnostics-suite keeps setup, verification, and known limitations in one place.
+network-diagnostics-suite records the stable project shape and the work still worth checking.
 
 ## Status
-Lifecycle stage: core-build-out. The useful early notes have been carried forward.
+Lifecycle stage: publication. The useful early notes have been carried forward.
 
 ## Usage
 - Merged scattered true guidance into the docs.
@@ -15,3 +15,10 @@ Lifecycle stage: core-build-out. The useful early notes have been carried forwar
 
 ## Current Focus
 Keep the next pass focused on verification and smaller changes.
+
+Use the next review to check behavior before adding surface area.
+Prefer narrow maintenance work over broad rewrites.
+## Development
+- Reduced surprise in the true release checks.
+
+- Earlier scratch detail is now represented in maintained sections.
