@@ -6,10 +6,10 @@ A working tree for network-diagnostics-suite with an evolving implementation his
 network-diagnostics-suite records the stable project shape and the work still worth checking.
 
 ## Status
-Lifecycle stage: publication. The useful early notes have been carried forward.
+Lifecycle stage: publication. Earlier setup detail now lives in maintained guidance.
 
 ## Usage
-- Merged scattered true guidance into the docs.
+- Merged scattered reporting guidance into the docs.
 
 - The older setup fragments have been reduced to the useful parts.
 
