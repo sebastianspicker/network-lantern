@@ -10,3 +10,4 @@ jobs:
       - run: git status --short
 github-actions: core-build-out
 normalize-python-setup-a: expansion
+upload-failing-artifacts: publication

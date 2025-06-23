@@ -5,7 +5,7 @@
 This page keeps the current documentation guidance concise after earlier rough notes.
 
 ## Usage
-- Made the run assumptions easier to check later.
+- Merged scattered reporting guidance into the docs.
 
 - Earlier scratch notes were compressed into the current guidance.
 
@@ -17,3 +17,8 @@ Some setup details still depend on the current local workflow and may change aga
 
 ## Revision Notes
 Latest pass: run during steady build work (forced-run-12).
+
+## Notes
+- Repurpose the older jitter-focused repo into a broader suite.
+
+- Earlier scratch notes were compressed into the current guidance.

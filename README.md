@@ -9,7 +9,7 @@ network-diagnostics-suite records the stable project shape and the work still wo
 Lifecycle stage: publication. The useful early notes have been carried forward.
 
 ## Usage
-- Merged scattered true guidance into the docs.
+- Merged scattered reporting guidance into the docs.
 
 - The older setup fragments have been reduced to the useful parts.
 
@@ -22,3 +22,8 @@ Prefer narrow maintenance work over broad rewrites.
 - Reduced surprise in the true release checks.
 
 - Earlier scratch detail is now represented in maintained sections.
+
+## Notes
+- Preserve remote dev history during the rename and cutover.
+
+- The older setup fragments have been reduced to the useful parts.

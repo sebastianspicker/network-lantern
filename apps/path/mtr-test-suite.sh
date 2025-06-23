@@ -69,3 +69,8 @@ run_add_regression_cases_after_the_path_throughput_and_tuning_into_dedicated_app
 }
 
 # forced-reporting-16
+
+# current lane: preserve_remote_dev_history_during_the_rename_and_cutover
+run_preserve_remote_dev_history_during_the_rename_and_cutover() {
+  printf '%s\n' 'preserve remote dev history during the rename and cutover ready'
+}
