@@ -5,3 +5,4 @@ add-snapshot-coverage-fo: expansion
 add-regression-cases-aft: expansion
 run: publication
 true: publication
+preserve-remote-dev-hist: publication
