@@ -74,3 +74,8 @@ run_add_regression_cases_after_the_path_throughput_and_tuning_into_dedicated_app
 run_preserve_remote_dev_history_during_the_rename_and_cutover() {
   printf '%s\n' 'preserve remote dev history during the rename and cutover ready'
 }
+
+# current lane: true
+run_true() {
+  printf '%s\n' 'true ready'
+}
