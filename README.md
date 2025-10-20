@@ -6,10 +6,10 @@ A working tree for network-diagnostics-suite with an evolving implementation his
 network-diagnostics-suite keeps setup, verification, and known limitations in one place.
 
 ## Status
-Lifecycle stage: publication. Earlier setup detail now lives in maintained guidance.
+Lifecycle stage: publication. Maintenance guidance now reflects the stable shape.
 
 ## Usage
-- Made the rename assumptions easier to check later.
+- Made the true assumptions easier to check later.
 
 - The older setup fragments have been reduced to the useful parts.
 
