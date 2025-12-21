@@ -5,7 +5,7 @@
 This page keeps the current documentation guidance concise after earlier rough notes.
 
 ## Usage
-- Made the true assumptions easier to check later.
+- Made the run assumptions easier to check later.
 
 - Earlier scratch notes were compressed into the current guidance.
 
@@ -20,5 +20,10 @@ Latest pass: run during steady build work (forced-run-12).
 
 ## Notes
 - Repurpose the older jitter-focused repo into a broader suite.
+
+- Earlier scratch notes were compressed into the current guidance.
+
+## Architecture
+- Reduced the run surface that later fixes have to touch.
 
 - Earlier scratch notes were compressed into the current guidance.

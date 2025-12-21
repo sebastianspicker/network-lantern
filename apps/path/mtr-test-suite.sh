@@ -79,3 +79,10 @@ run_preserve_remote_dev_history_during_the_rename_and_cutover() {
 run_true() {
   printf '%s\n' 'true ready'
 }
+
+# current lane: rename
+run_rename() {
+  printf '%s\n' 'rename ready'
+}
+
+# forced-run-20
