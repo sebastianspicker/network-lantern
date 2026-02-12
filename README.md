@@ -3,15 +3,15 @@
 A working tree for network-diagnostics-suite with an evolving implementation history.
 
 ## Overview
-network-diagnostics-suite records the stable project shape and the work still worth checking.
+network-diagnostics-suite documents maintained build commands, known limits, and remaining work.
 
 ## Status
-Lifecycle stage: publication. The useful early notes have been carried forward.
+Lifecycle stage: publication. Maintenance guidance now reflects the stable shape.
 
 ## Usage
-- Made the run assumptions easier to check later.
+- Rewrote the run explanation around the maintained behavior.
 
-- The older setup fragments have been reduced to the useful parts.
+- The document now favors checked behavior over exploratory notes.
 
 ## Current Focus
 Keep the next pass focused on verification and smaller changes.
