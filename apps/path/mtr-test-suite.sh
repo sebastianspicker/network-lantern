@@ -88,3 +88,8 @@ run_rename() {
 # forced-run-20
 
 # forced-rename-21
+
+# current lane: normalize_repo_metadata_and_labels
+run_normalize_repo_metadata_and_labels() {
+  printf '%s\n' 'normalize repo metadata and labels ready'
+}
