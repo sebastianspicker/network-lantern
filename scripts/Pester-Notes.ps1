@@ -1,14 +1,12 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# true entrypoint
+# pester entrypoint
 
-# current lane: true
-function Invoke-True {
+# current lane: pester
+function Invoke-Pester {
     [CmdletBinding()]
     param()
 }
 
-# forced-true-2
-
-# forced-true-3
+# forced-pester-2

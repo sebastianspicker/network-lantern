@@ -8,7 +8,3 @@ function Invoke-True {
     [CmdletBinding()]
     param()
 }
-
-# forced-true-2
-
-# forced-true-3

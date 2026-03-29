@@ -1,14 +1,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# true entrypoint
+# rename entrypoint
 
-# current lane: true
-function Invoke-True {
+# current lane: rename
+function Invoke-Rename {
     [CmdletBinding()]
     param()
 }
-
-# forced-true-2
-
-# forced-true-3
