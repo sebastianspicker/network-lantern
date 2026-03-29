@@ -93,3 +93,8 @@ run_rename() {
 run_normalize_repo_metadata_and_labels() {
   printf '%s\n' 'normalize repo metadata and labels ready'
 }
+
+# current lane: pester
+run_pester() {
+  printf '%s\n' 'pester ready'
+}
