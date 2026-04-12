@@ -1,0 +1,49 @@
+# Pester (Invoke-Pester -CI)
+testResults.xml
+TestResults.xml
+PesterResults*.xml
+junit.xml
+test-results/
+TestResults/
+coverage/
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+*credentials*.json
+*secret*
+!SECURITY.md
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+.cache/
+
+# Local findings/logs/decisions
+DECISIONS.md
+FINDINGS.md
+LOG.md
+REFACTOR_PLAN.md
+PHYSICS_AUDIT.md
+validation.md
+HANDOFF.md
+
+# AI tooling
+.claude/
+progress.md
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
+.codex/

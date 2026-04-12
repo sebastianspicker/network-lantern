@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a problem with the optimization script or module
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please avoid sharing sensitive data (keys, tokens, personal info).
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened? Include a short, clear description.
+      placeholder: Example: DryRun still changed a registry value...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide minimal steps to reproduce the issue.
+      placeholder: |
+        1. Run pwsh ...
+        2. Use preset ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide non-sensitive environment details.
+      value: |
+        - OS:
+        - PowerShell version (pwsh -v):
+        - Script/module version:
+        - NIC model/driver (if relevant):
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I ran with `-DryRun` first (if applicable).
+          required: false
+        - label: I created a backup (`-Action Backup`) before applying changes.
+          required: false
