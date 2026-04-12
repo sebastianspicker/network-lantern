@@ -11,7 +11,22 @@ $requiredModules = @{
   Pester           = '5.7.1'
 }
 
-if (Get-Command -Name Install-PSResource -ErrorAction SilentlyContinue) {
+function Test-ExactModuleInstalled {
+  param(
+    [string]$Name,
+    [string]$Version
+  )
+
+  return [bool](Get-Module -ListAvailable -Name $Name | Where-Object { $_.Version -eq [version]$Version } | Select-Object -First 1)
+}
+
+$missingModules = @(
+  $requiredModules.GetEnumerator() | Where-Object { -not (Test-ExactModuleInstalled -Name $_.Key -Version $_.Value) }
+)
+
+if ($missingModules.Count -eq 0) {
+  Write-Information 'Required PowerShell modules already available; skipping installation.' -InformationAction Continue
+} elseif (Get-Command -Name Install-PSResource -ErrorAction SilentlyContinue) {
   $repo = Get-PSResourceRepository -Name PSGallery -ErrorAction SilentlyContinue
   if (-not $repo) {
     Register-PSResourceRepository -PSGallery
@@ -25,15 +40,9 @@ if (Get-Command -Name Install-PSResource -ErrorAction SilentlyContinue) {
   }
 
   try {
-    foreach ($entry in $requiredModules.GetEnumerator()) {
+    foreach ($entry in $missingModules) {
       $name = $entry.Key
       $version = $entry.Value
-      $installed = Get-Module -ListAvailable -Name $name | Where-Object { $_.Version -eq [version]$version } | Select-Object -First 1
-      if ($installed) {
-        Write-Information "Using $name $($installed.Version)" -InformationAction Continue
-        continue
-      }
-
       Write-Information "Installing $name $version via PSResourceGet..." -InformationAction Continue
       Install-PSResource -Name $name -Version $version -Scope CurrentUser -Repository PSGallery -TrustRepository -ErrorAction Stop
     }
@@ -62,15 +71,9 @@ if (Get-Command -Name Install-PSResource -ErrorAction SilentlyContinue) {
       Write-Warning "Install-PackageProvider failed: $($_.Exception.Message)"
     }
 
-    foreach ($entry in $requiredModules.GetEnumerator()) {
+    foreach ($entry in $missingModules) {
       $name = $entry.Key
       $version = [version]$entry.Value
-      $installed = Get-Module -ListAvailable -Name $name | Where-Object { $_.Version -eq $version } | Select-Object -First 1
-      if ($installed) {
-        Write-Information "Using $name $($installed.Version)" -InformationAction Continue
-        continue
-      }
-
       Write-Information "Installing $name $version via PowerShellGet..." -InformationAction Continue
       Install-Module -Name $name -RequiredVersion $version -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop
     }
@@ -81,20 +84,38 @@ if (Get-Command -Name Install-PSResource -ErrorAction SilentlyContinue) {
   }
 }
 
-$scriptAnalyzerResults = Invoke-ScriptAnalyzer -Path $repoRoot -Recurse
+$pathsToAnalyze = @(
+  (Join-Path $repoRoot 'apps')
+  (Join-Path $repoRoot 'src')
+  (Join-Path $repoRoot 'scripts')
+  (Join-Path $repoRoot 'tests')
+  (Join-Path $repoRoot 'Invoke-NetworkDiagnostics.ps1')
+)
+$settingsPath = Join-Path $repoRoot 'PSScriptAnalyzerSettings.psd1'
+$scriptAnalyzerResults = foreach ($path in $pathsToAnalyze) {
+  Invoke-ScriptAnalyzer -Path $path -Recurse -Settings $settingsPath
+}
 if ($scriptAnalyzerResults) {
   $scriptAnalyzerResults | Sort-Object ScriptName, Line | Format-Table -AutoSize | Out-String | Write-Output
   throw "PSScriptAnalyzer found $(@($scriptAnalyzerResults).Count) issue(s)."
 }
 
-$pesterResultsDir = Join-Path -Path $repoRoot -ChildPath 'test-results'
-if (-not (Test-Path -LiteralPath $pesterResultsDir)) {
-  New-Item -Path $pesterResultsDir -ItemType Directory -Force | Out-Null
+$artifactsDir = Join-Path -Path $repoRoot -ChildPath 'artifacts'
+if (-not (Test-Path -LiteralPath $artifactsDir)) {
+  New-Item -Path $artifactsDir -ItemType Directory -Force | Out-Null
 }
 
-Push-Location -Path $pesterResultsDir
-try {
-  Invoke-Pester -Path (Join-Path -Path $repoRoot -ChildPath 'tests') -CI
-} finally {
-  Pop-Location
+$pesterConfiguration = [PesterConfiguration]::Default
+$pesterConfiguration.Run.Path = Join-Path $repoRoot 'tests'
+$pesterConfiguration.Run.Exit = $false
+$pesterConfiguration.Run.PassThru = $true
+$pesterConfiguration.Output.Verbosity = 'Detailed'
+$pesterConfiguration.TestResult.Enabled = $true
+$pesterConfiguration.TestResult.OutputFormat = 'NUnitXml'
+$pesterConfiguration.TestResult.OutputPath = Join-Path $artifactsDir 'testResults.xml'
+$pesterConfiguration.Should.ErrorAction = 'Stop'
+
+$pesterResult = Invoke-Pester -Configuration $pesterConfiguration
+if (-not $pesterResult -or $pesterResult.FailedCount -gt 0) {
+  throw "Pester reported $($pesterResult.FailedCount) failed test(s)."
 }

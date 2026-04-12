@@ -6,6 +6,8 @@ junit.xml
 test-results/
 TestResults/
 coverage/
+artifacts/
+profiles/*.local.json
 
 # Secrets and credentials
 .env
