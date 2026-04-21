@@ -6,13 +6,13 @@ Describe 'Invoke-NetworkDiagnostics orchestration' {
     $script:InvokeNetworkDiagnosticsScriptPath = Join-Path $PSScriptRoot '../../Invoke-NetworkDiagnostics.ps1'
   }
 
-  It 'preserves default triage path arguments in dry-run mode' {
+  It 'preserves configured triage path arguments in dry-run mode' {
     $output = & pwsh -NoLogo -NoProfile -NonInteractive -File $script:InvokeNetworkDiagnosticsScriptPath -Workflow Triage -DryRun 2>&1
 
     $LASTEXITCODE | Should -Be 0
     ($output | Out-String) | Should -Match 'Protocols:\s+IPv4, IPv6'
-    ($output | Out-String) | Should -Match 'IPv4 hosts:\s+netcologne\.de, google\.com, wikipedia\.org, amazon\.de'
-    ($output | Out-String) | Should -Match 'IPv6 hosts:\s+netcologne\.de, google\.com, wikipedia\.org'
+    ($output | Out-String) | Should -Match 'IPv4 hosts:\s+cloudflare\.com, google\.com, wikipedia\.org, amazon\.de'
+    ($output | Out-String) | Should -Match 'IPv6 hosts:\s+cloudflare\.com, google\.com, wikipedia\.org'
     ($output | Out-String) | Should -Not -Match 'IPv4 hosts:\s+IPv6'
   }
 

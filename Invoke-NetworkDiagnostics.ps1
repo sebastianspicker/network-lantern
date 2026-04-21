@@ -207,7 +207,7 @@ function Invoke-IsolatedPowerShellScript {
   $env:NDS_CHILD_PARAMS_JSON = ConvertTo-Json -InputObject $Parameters -Compress -Depth 8
 
   try {
-    & pwsh -NoProfile -NonInteractive -EncodedCommand $isolatedPwshBootstrapEncoded
+    & pwsh -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $isolatedPwshBootstrapEncoded
   } finally {
     if ($null -eq $previousScriptPath) {
       Remove-Item Env:NDS_CHILD_SCRIPT_PATH -ErrorAction SilentlyContinue
