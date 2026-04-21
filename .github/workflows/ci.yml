@@ -1,20 +1,77 @@
-name: Main verification
+name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Module version pins — keep in sync with $requiredModules in scripts/ci.ps1
+# PSScriptAnalyzer: 1.24.0  |  Pester: 5.7.1
+# Update the cache key suffix below whenever these versions change.
 
 jobs:
-  check_1_verify:
-    name: "verify"
+  path-lint-test:
+    name: Path lint and tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - name: Verify checkout
-        run: git status --short
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install bash test tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.local/share/powershell/Modules
+          key: psmodules-${{ runner.os }}-pssa-1.24.0-pester-5.7.1
+
+      - name: Run local CI
+        run: ./scripts/ci-local.sh
+
+  powershell-lint-test:
+    name: PowerShell checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            modulePath: ~/.local/share/powershell/Modules
+          - os: windows-latest
+            modulePath: C:\Users\runneradmin\Documents\PowerShell\Modules
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ matrix.modulePath }}
+          key: psmodules-${{ runner.os }}-pssa-1.24.0-pester-5.7.1
+
+      - name: Secret scan
+        shell: pwsh -NoProfile -NonInteractive -Command "{0}"
+        run: |
+          ./scripts/Invoke-SecretScan.ps1
+
+      - name: Run PowerShell checks
+        shell: pwsh -NoProfile -NonInteractive -Command "{0}"
+        run: |
+          ./scripts/ci.ps1

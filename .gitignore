@@ -1,6 +1,54 @@
-node_modules/
-.venv/
-dist/
-.pytest_cache/
+# Pester (Invoke-Pester -CI)
+testResults.xml
+TestResults.xml
+PesterResults*.xml
+junit.xml
+test-results/
+TestResults/
+coverage/
+artifacts/
+profiles/*.local.json
 
-# forced-normalize-repo-metadata--1
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+*credentials*.json
+*secret*
+!SECURITY.md
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+.cache/
+
+# Local findings/logs/decisions
+DECISIONS.md
+FINDINGS.md
+LOG.md
+REFACTOR_PLAN.md
+PHYSICS_AUDIT.md
+validation.md
+HANDOFF.md
+
+# Task-tracking artifacts
+DONE
+
+# AI tooling
+.claude/
+progress.md
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
+.codex/

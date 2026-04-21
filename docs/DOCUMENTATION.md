@@ -1,29 +1,12 @@
-# Documentation
+# Documentation Index
 
-
-## Context
-This page keeps the current documentation guidance concise after earlier rough notes.
-
-## Usage
-- Made the true assumptions easier to check later.
-
-- Earlier scratch notes were compressed into the current guidance.
-
-## Notes Folded Into Current Flow
-Early notes are still uneven and may be folded into clearer sections later.
-
-## Caveats
-Some setup details still depend on the current local workflow and may change again.
-
-## Revision Notes
-Latest pass: true during maintenance burst work (forced-true-21).
-
-## Notes
-- Repurpose the older jitter-focused repo into a broader suite.
-
-- Earlier scratch notes were compressed into the current guidance.
-
-## Architecture
-- Reduced the run surface that later fixes have to touch.
-
-- Earlier scratch notes were compressed into the current guidance.
+- Architecture: [architecture.md](architecture.md)
+- Decision tree: [workflows/decision-tree.md](workflows/decision-tree.md)
+- Path workflow: [workflows/diagnose-path.md](workflows/diagnose-path.md)
+- Throughput workflow: [workflows/diagnose-throughput.md](workflows/diagnose-throughput.md)
+- Windows tuning workflow: [workflows/windows-tuning.md](workflows/windows-tuning.md)
+- Tuning evidence matrix: [evidence/tuning-matrix.md](evidence/tuning-matrix.md)
+- Migration from legacy repos:
+  - [from-iperf3-test-suite.md](migration/from-iperf3-test-suite.md)
+  - [from-mtr-test-suite.md](migration/from-mtr-test-suite.md)
+  - [from-windows-udp-jitter-optimization.md](migration/from-windows-udp-jitter-optimization.md)
