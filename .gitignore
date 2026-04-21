@@ -20,6 +20,7 @@ profiles/*.local.json
 *.cer
 *credentials*.json
 *secret*
+!scripts/Invoke-SecretScan.ps1
 !SECURITY.md
 
 # Logs and temp files
