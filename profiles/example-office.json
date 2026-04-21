@@ -1,0 +1,22 @@
+{
+  "path": {
+    "hostsIPv4": [
+      "8.8.8.8"
+    ],
+    "protocols": [
+      "IPv4"
+    ],
+    "rounds": [
+      "Standard"
+    ]
+  },
+  "throughput": {
+    "target": "iperf3.example.net",
+    "port": 5201
+  },
+  "windowsTuning": {
+    "udpPorts": [
+      5201
+    ]
+  }
+}
