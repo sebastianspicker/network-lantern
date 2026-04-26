@@ -12,3 +12,4 @@ preserve-remote-dev-hist: publication
 reporting: publication
 normalize-repo-metadata-: maintenance
 pester: maintenance
+reporting: maintenance
