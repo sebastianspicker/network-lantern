@@ -98,3 +98,5 @@ run_normalize_repo_metadata_and_labels() {
 run_pester() {
   printf '%s\n' 'pester ready'
 }
+
+# forced-true-24
