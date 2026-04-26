@@ -2,10 +2,19 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+BATS_BIN="${BATS:-}"
 
+if [[ -z "$BATS_BIN" ]]; then
+  if command -v bats >/dev/null 2>&1; then
+    BATS_BIN="bats"
+  elif [[ -x "$REPO_ROOT/tests/bats/bin/bats" ]]; then
+    BATS_BIN="$REPO_ROOT/tests/bats/bin/bats"
+  fi
+fi
+
+HAS_PWSH=1
 if ! command -v pwsh >/dev/null 2>&1; then
-  echo "pwsh not found. Install PowerShell 7+ first." >&2
-  exit 1
+  HAS_PWSH=0
 fi
 
 if ! command -v shellcheck >/dev/null 2>&1; then
@@ -20,10 +29,15 @@ shellcheck -x \
   "$REPO_ROOT/scripts/run-workflow.sh" \
   "$REPO_ROOT"/src/bash/path/lib/*.sh
 
-if command -v bats >/dev/null 2>&1; then
-  bats "$REPO_ROOT/tests/path"
+if [[ -n "$BATS_BIN" ]]; then
+  "$BATS_BIN" "$REPO_ROOT/tests/path"
 else
-  echo "bats not found. Skipping Bash test suite." >&2
+  echo "bats not found. Skipping Bash test suite. Install bats or run scripts/install-test-deps.sh." >&2
 fi
 
-pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/ci.ps1"
+if [[ "$HAS_PWSH" -eq 1 ]]; then
+  pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/ci.ps1"
+else
+  echo "pwsh not found. Bash checks were run, but PowerShell validation could not run." >&2
+  exit 1
+fi

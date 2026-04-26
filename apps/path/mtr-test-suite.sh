@@ -82,21 +82,18 @@ main() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--log-dir)
-			[[ $# -ge 2 ]] || die "--log-dir requires an argument"
-			validate_path_option "--log-dir" "$2"
-			log_dir=$2
+			require_path_option "--log-dir" "$#" "${2-}"
+			log_dir=${2-}
 			shift 2
 			;;
 		--json-log)
-			[[ $# -ge 2 ]] || die "--json-log requires an argument"
-			validate_path_option "--json-log" "$2"
-			json_log=$2
+			require_path_option "--json-log" "$#" "${2-}"
+			json_log=${2-}
 			shift 2
 			;;
 		--table-log)
-			[[ $# -ge 2 ]] || die "--table-log requires an argument"
-			validate_path_option "--table-log" "$2"
-			table_log=$2
+			require_path_option "--table-log" "$#" "${2-}"
+			table_log=${2-}
 			shift 2
 			;;
 		--types)

@@ -87,7 +87,7 @@ validate_path_option() {
 require_path_option() {
   local opt_name=$1
   local argc=$2
-  local val=$3
+  local val=${3-}
   [[ $argc -ge 2 ]] || die "$opt_name requires an argument"
   validate_path_option "$opt_name" "$val"
 }

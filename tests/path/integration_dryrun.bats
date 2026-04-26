@@ -147,3 +147,21 @@ load test_helper
   run bash "$PATH_APP" --log-dir ".." --dry-run
   assert_failure
 }
+
+@test "missing --log-dir argument is rejected clearly" {
+  run bash "$PATH_APP" --log-dir --dry-run
+  assert_failure
+  assert_output --partial "--log-dir argument must not look like an option"
+}
+
+@test "missing --json-log argument is rejected clearly" {
+  run bash "$PATH_APP" --json-log --dry-run
+  assert_failure
+  assert_output --partial "--json-log argument must not look like an option"
+}
+
+@test "missing --table-log argument is rejected clearly" {
+  run bash "$PATH_APP" --table-log --dry-run
+  assert_failure
+  assert_output --partial "--table-log argument must not look like an option"
+}
