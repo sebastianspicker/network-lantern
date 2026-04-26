@@ -16,4 +16,4 @@ Early notes are still uneven and may be folded into clearer sections later.
 Some setup details still depend on the current local workflow and may change again.
 
 ## Revision Notes
-Latest pass: throughput during revival work (forced-throughput-6).
+Latest pass: true during maintenance burst work (forced-true-27).
