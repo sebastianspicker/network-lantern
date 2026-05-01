@@ -80,6 +80,17 @@ Describe 'Invoke-NetworkDiagnostics orchestration' {
     ($output | Out-String) | Should -Match 'Protocols:\s+IPv4'
   }
 
+  It 'rejects oversized workflow profiles before parsing JSON' {
+    $profileFile = Join-Path $TestDrive 'oversized-profile.json'
+    Set-Content -LiteralPath $profileFile -Value ('x' * (1MB + 1)) -NoNewline -Encoding UTF8
+
+    $output = & pwsh -NoLogo -NoProfile -NonInteractive -File $script:InvokeNetworkDiagnosticsScriptPath `
+      -Workflow Path -ProfilePath $profileFile -DryRun 2>&1
+
+    $LASTEXITCODE | Should -Not -Be 0
+    ($output | Out-String) | Should -Match 'ProfilePath exceeds maximum size'
+  }
+
   It 'Triage skips throughput silently when IperfTarget is not provided' {
     $output = & pwsh -NoLogo -NoProfile -NonInteractive -File $script:InvokeNetworkDiagnosticsScriptPath `
       -Workflow Triage -DryRun 2>&1

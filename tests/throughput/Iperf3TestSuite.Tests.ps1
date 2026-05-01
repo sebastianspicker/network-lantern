@@ -788,6 +788,12 @@ exit `$LASTEXITCODE
       }
     }
 
+    It 'rejects OutDir values that look like opener options' {
+      InModuleScope Iperf3TestSuite {
+        { ConvertTo-Iperf3KnownValue -Key 'OutDir' -Value '-reports' } | Should -Throw '*must not look like an option*'
+      }
+    }
+
     It 'accepts normal OutDir paths' {
       InModuleScope Iperf3TestSuite {
         $result = ConvertTo-Iperf3KnownValue -Key 'OutDir' -Value 'logs/output'
@@ -911,6 +917,15 @@ exit `$LASTEXITCODE
       }
     }
 
+    It 'classifies option-like paths as InputValidation' {
+      InModuleScope Iperf3TestSuite {
+        $ex = New-Object System.Exception("OutDir path must not look like an option (starts with '-'): -reports")
+        $er = New-Object System.Management.Automation.ErrorRecord($ex, 'test', 'NotSpecified', $null)
+        $result = Resolve-Iperf3ClassifiedError -ErrorRecord $er
+        $result.ErrorId | Should -Be 'Iperf3TestSuite.InputValidation'
+      }
+    }
+
     It 'classifies unmatched patterns as Internal with verbose output' {
       InModuleScope Iperf3TestSuite {
         $ex = New-Object System.Exception("Something completely unexpected happened.")
@@ -961,6 +976,23 @@ exit `$LASTEXITCODE
         $base = Join-Path $TestDrive 'sub'
         $outside = Join-Path $TestDrive 'other'
         Test-PathUnderBase -BasePath $base -CandidatePath $outside | Should -Be $false
+      }
+    }
+  }
+
+  Context 'Open-FolderOrFile' {
+    It 'passes an absolute path to platform openers' {
+      . (Join-Path $script:RepoRoot 'scripts/PathHelpers.ps1')
+      $relativePath = 'relative-output'
+      $expectedPath = [System.IO.Path]::GetFullPath($relativePath)
+
+      Mock -CommandName Get-Command { [pscustomobject]@{ Name = 'xdg-open' } }
+      Mock -CommandName Start-Process {}
+
+      Open-FolderOrFile -Path $relativePath
+
+      Assert-MockCalled -CommandName Start-Process -Times 1 -Exactly -ParameterFilter {
+        @($ArgumentList)[0] -eq $expectedPath
       }
     }
   }

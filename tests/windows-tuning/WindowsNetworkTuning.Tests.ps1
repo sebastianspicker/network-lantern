@@ -95,6 +95,39 @@ Describe 'Windows network tuning module' {
 
   Context 'Restore safety and reset scope' {
     InModuleScope WindowsUdpJitterOptimization {
+      It 'rejects missing backup manifests before restore work starts' {
+        $backupFolder = Join-Path $TestDrive 'missing-manifest-backup'
+        New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+
+        Mock -CommandName Restore-UjRegistryFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjQosFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjNicFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjRscFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjPowerPlanFromBackup { throw 'should not run' }
+
+        $result = Restore-UjState -BackupFolder $backupFolder
+
+        $result['Manifest'] | Should -Be 'Warn'
+        $result['Registry'] | Should -Be 'Skipped'
+      }
+
+      It 'rejects invalid backup manifests before restore work starts' {
+        $backupFolder = Join-Path $TestDrive 'invalid-manifest-backup'
+        New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $backupFolder 'backup_manifest.json') -Value '{' -Encoding UTF8
+
+        Mock -CommandName Restore-UjRegistryFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjQosFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjNicFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjRscFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjPowerPlanFromBackup { throw 'should not run' }
+
+        $result = Restore-UjState -BackupFolder $backupFolder
+
+        $result['Manifest'] | Should -Be 'Warn'
+        $result['Registry'] | Should -Be 'Skipped'
+      }
+
       It 'rejects incompatible backup manifests before restore work starts' {
         $backupFolder = Join-Path $TestDrive 'incompatible-backup'
         New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
