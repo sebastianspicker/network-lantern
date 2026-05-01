@@ -59,19 +59,20 @@ function Open-FolderOrFile {
     [Parameter(Mandatory)]
     [string]$Path
   )
+  $openerPath = [System.IO.Path]::GetFullPath($Path)
   if ($IsWindows) {
-    Start-Process explorer.exe -ArgumentList @($Path)
+    Start-Process explorer.exe -ArgumentList @($openerPath)
   }
   elseif ($IsMacOS) {
-    Start-Process 'open' -ArgumentList @($Path)
+    Start-Process 'open' -ArgumentList @($openerPath)
   }
   else {
     $xdgOpen = Get-Command 'xdg-open' -ErrorAction SilentlyContinue
     if ($xdgOpen) {
-      Start-Process 'xdg-open' -ArgumentList @($Path)
+      Start-Process 'xdg-open' -ArgumentList @($openerPath)
     }
     else {
-      Write-Warning "No file opener found. Path: $Path"
+      Write-Warning "No file opener found. Path: $openerPath"
     }
   }
 }
