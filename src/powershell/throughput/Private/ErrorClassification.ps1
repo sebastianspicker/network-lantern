@@ -24,7 +24,7 @@ function Resolve-Iperf3ClassifiedError {
   if (
     $ErrorRecord.Exception -is [System.Management.Automation.ParameterBindingException] -or
     $fqid -match 'ParameterArgumentValidationError|ParameterBinding' -or
-    $msg -match 'Cannot validate argument on parameter|Cannot bind parameter|Invalid value for key|Target is required|Invalid Target|ProfileName is required|Profile .+ not found|At least one DSCP class is required|Profiles file path must be under|Configuration path must be under|invalid characters|\.json extension|exceeds maximum length|control characters|Unknown parameter key|Invalid TCP window size|Invalid DSCP class|Unknown DSCP class'
+    $msg -match 'Cannot validate argument on parameter|Cannot bind parameter|Invalid value for key|Target is required|Invalid Target|ProfileName is required|Profile .+ not found|At least one DSCP class is required|Profiles file path must be under|Configuration path must be under|invalid characters|\.json extension|exceeds maximum length|control characters|must not look like an option|Unknown parameter key|Invalid TCP window size|Invalid DSCP class|Unknown DSCP class'
   ) {
     return [pscustomobject]@{
       ErrorId  = 'Iperf3TestSuite.InputValidation'

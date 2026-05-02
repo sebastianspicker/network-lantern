@@ -47,6 +47,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
+$script:MaxWorkflowProfileBytes = 1MB
 
 function Resolve-ArtifactRoot {
   param([string]$Path)
@@ -72,6 +73,10 @@ function Import-WorkflowProfile {
   }
   if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
     throw "ProfilePath is not a file: $resolvedPath"
+  }
+  $profileInfo = Get-Item -LiteralPath $resolvedPath
+  if ($profileInfo.Length -gt $script:MaxWorkflowProfileBytes) {
+    throw "ProfilePath exceeds maximum size (1 MB): $resolvedPath"
   }
 
   $parsed = Get-Content -LiteralPath $resolvedPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable

@@ -596,12 +596,8 @@ function Restore-UjState {
   $manifestCheck = Read-UjBackupManifest -BackupFolder $BackupFolder
   if ($manifestCheck.Status -eq 'OK') {
     Write-UjInformation -Message ("Validated backup manifest (Timestamp: {0})" -f $manifestCheck.Manifest.Timestamp)
-  } elseif ($manifestCheck.Status -eq 'Missing') {
-    Write-Warning -Message 'No backup summary file found. The backup may be incomplete or from an older version of this tool. Restore will proceed but some components may be skipped.'
-  } elseif ($manifestCheck.Status -eq 'Invalid') {
-    Write-Warning -Message 'Could not read the backup summary file. The backup may still work, but some details could not be verified.'
   } else {
-    Write-Warning -Message $manifestCheck.Message
+    Write-Warning -Message ("Restore blocked: {0}" -f $manifestCheck.Message)
     return [ordered]@{
       Manifest    = 'Warn'
       Registry    = 'Skipped'

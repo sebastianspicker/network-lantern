@@ -125,6 +125,7 @@ function ConvertTo-Iperf3KnownValue {
     'OutDir' {
       $s = ConvertTo-Iperf3NonEmptyString -Value $Value -Key 'OutDir'
       if ($s -match '[\x00-\x1f]') { throw "OutDir path contains control characters." }
+      if ($s.StartsWith('-')) { throw "OutDir path must not look like an option (starts with '-'): $s" }
       return $s
     }
     'ProfileName' { return (ConvertTo-Iperf3NonEmptyString -Value $Value -Key 'ProfileName') }
