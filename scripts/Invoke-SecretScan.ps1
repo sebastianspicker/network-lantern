@@ -38,14 +38,32 @@ $patterns = @(
 $hitCount = 0
 $selfName = [System.IO.Path]::GetFileName($MyInvocation.MyCommand.Path)
 $binaryExts = @('.exe','.dll','.zip','.gz','.tar','.png','.jpg','.gif','.ico','.woff','.woff2','.ttf','.eot','.pdf')
-$files = Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue |
-  Where-Object {
-    $full = $_.FullName
-    $parts = $full.Split([IO.Path]::DirectorySeparatorChar)
-    $parts -notcontains '.git' -and
-      $_.Name -ne $selfName -and
+$resolvedPath = [System.IO.Path]::GetFullPath($Path)
+$gitDir = Join-Path $resolvedPath '.git'
+
+if ((Test-Path -LiteralPath $gitDir) -and (Get-Command -Name git -ErrorAction SilentlyContinue)) {
+  $trackedPaths = & git -C $resolvedPath ls-files -z
+  $files = @($trackedPaths -split "`0" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object {
+      $candidate = Join-Path $resolvedPath $_
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        Get-Item -LiteralPath $candidate
+      }
+    })
+} else {
+  $files = Get-ChildItem -LiteralPath $resolvedPath -Recurse -File -Force -ErrorAction SilentlyContinue |
+    Where-Object {
+      $full = $_.FullName
+      $parts = $full.Split([IO.Path]::DirectorySeparatorChar)
+      $parts -notcontains '.git' -and
+        $parts -notcontains '.cache' -and
+        $parts -notcontains 'artifacts'
+    }
+}
+
+$files = @($files | Where-Object {
+    $_.Name -ne $selfName -and
       $_.Extension -notin $binaryExts
-  }
+  })
 
 foreach ($pattern in $patterns) {
   $hits = $files | Select-String -Pattern $pattern

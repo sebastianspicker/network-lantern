@@ -1,3 +1,8 @@
+[CmdletBinding()]
+param(
+  [switch]$NoInstall
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -25,6 +30,11 @@ function Test-ExactModuleInstalled {
 $missingModules = @(
   $requiredModules.GetEnumerator() | Where-Object { -not (Test-ExactModuleInstalled -Name $_.Key -Version $_.Value) }
 )
+
+if ($NoInstall -and $missingModules.Count -gt 0) {
+  [Console]::Error.WriteLine("Missing required PowerShell module(s): $($missingModules.Key -join ', '). Re-run without -NoInstall to install them, or install them manually.")
+  exit 1
+}
 
 if ($missingModules.Count -eq 0) {
   Write-Information 'Required PowerShell modules already available; skipping installation.' -InformationAction Continue
