@@ -26,4 +26,4 @@ else
   echo "bats not found. Skipping Bash test suite." >&2
 fi
 
-pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/ci.ps1"
+pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/ci.ps1" -NoInstall
