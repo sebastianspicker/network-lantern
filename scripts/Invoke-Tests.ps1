@@ -14,6 +14,8 @@ if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge
   exit 1
 }
 
+Import-Module -Name Pester -MinimumVersion 5.0.0 -ErrorAction Stop
+
 $config = [PesterConfiguration]::Default
 $config.Run.Path = $testsDir
 $config.Run.Exit = $true

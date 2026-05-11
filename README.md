@@ -32,7 +32,13 @@ pwsh -File .\Invoke-NetworkDiagnostics.ps1 -Workflow WindowsTuning -TuningAction
 
 ## Verification
 
-Local suite:
+Prerequisite readiness check, no installs:
+
+```powershell
+pwsh -File .\scripts\Test-Prerequisites.ps1
+```
+
+Local suite, no dependency installs:
 
 ```bash
 ./scripts/ci-local.sh
@@ -43,6 +49,19 @@ PowerShell-only checks:
 ```powershell
 pwsh -File .\scripts\ci.ps1
 ```
+
+PowerShell-only checks without installing missing modules:
+
+```powershell
+pwsh -File .\scripts\ci.ps1 -NoInstall
+```
+
+Windows notes:
+
+- The Bash and Bats files are pinned to LF line endings through `.gitattributes` so WSL Bash can parse them from a Windows checkout.
+- `scripts\ci.ps1` installs the pinned PowerShell test modules when they are missing unless `-NoInstall` is used.
+- Use `pwsh -File .\scripts\Test-Prerequisites.ps1 -IncludeIperf3` when validating a host for real throughput runs.
+- `iPerf3Test.ps1 -WhatIf`, `NetPathSuite.ps1 -DryRun`, and Windows tuning `-DryRun` are the safe preview modes; real throughput and path runs can perform network probes.
 
 ## Layout
 
