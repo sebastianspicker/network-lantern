@@ -23,7 +23,7 @@ $script:UjBackupFileQosOurs = 'qos_ours.xml'
 $script:UjBackupFileNicAdvanced = 'nic_advanced_backup.csv'
 $script:UjBackupFileRsc = 'rsc_backup.csv'
 $script:UjBackupFilePowerplan = 'powerplan.txt'
-$script:UjBackupSchemaVersion = 2
+$script:UjBackupSchemaVersion = 3
 
 # Default DSCP value for QoS policies (EF / Expedited Forwarding)
 $script:UjDefaultDscp = 46

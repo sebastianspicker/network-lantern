@@ -149,6 +149,112 @@ Describe 'Windows network tuning module' {
         $result['Registry'] | Should -Be 'Skipped'
       }
 
+      It 'rejects restore manifests without artifact digests before restore work starts' {
+        $backupFolder = Join-Path $TestDrive 'unsigned-manifest-backup'
+        New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+        @{
+          SchemaVersion = $script:UjBackupSchemaVersion
+          ToolName = 'network-diagnostics-suite'
+          Timestamp = '2026-01-01T00:00:00Z'
+          Components = @{}
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupFolder 'backup_manifest.json') -Encoding UTF8
+
+        Mock -CommandName Restore-UjRegistryFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjQosFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjNicFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjRscFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjPowerPlanFromBackup { throw 'should not run' }
+
+        $result = Restore-UjState -BackupFolder $backupFolder
+
+        $result['Manifest'] | Should -Be 'Warn'
+        $result['Registry'] | Should -Be 'Skipped'
+      }
+
+      It 'accepts restore manifests when listed artifact digests match' {
+        $backupFolder = Join-Path $TestDrive 'digested-manifest-backup'
+        New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+        $powerPlanPath = Join-Path $backupFolder $script:UjBackupFilePowerplan
+        Set-Content -LiteralPath $powerPlanPath -Value $script:UjPowerPlanGuidBalanced -Encoding UTF8
+        $digests = @{
+          $script:UjBackupFilePowerplan = (Get-FileHash -LiteralPath $powerPlanPath -Algorithm SHA256).Hash
+        }
+        @{
+          SchemaVersion = $script:UjBackupSchemaVersion
+          ToolName = 'network-diagnostics-suite'
+          Timestamp = '2026-01-01T00:00:00Z'
+          Components = @{ PowerPlan = $true }
+          ArtifactDigests = $digests
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupFolder 'backup_manifest.json') -Encoding UTF8
+
+        Mock -CommandName Restore-UjRegistryFromBackup { Get-UjRestoreComponentResult -Status 'Skipped' }
+        Mock -CommandName Restore-UjQosFromBackup { Get-UjRestoreComponentResult -Status 'Skipped' }
+        Mock -CommandName Restore-UjNicFromBackup { Get-UjRestoreComponentResult -Status 'Skipped' }
+        Mock -CommandName Restore-UjRscFromBackup { Get-UjRestoreComponentResult -Status 'Skipped' }
+        Mock -CommandName Restore-UjPowerPlanFromBackup { Get-UjRestoreComponentResult -Status 'OK' }
+
+        $result = Restore-UjState -BackupFolder $backupFolder
+
+        $result['PowerPlan'] | Should -Be 'OK'
+        Assert-MockCalled -CommandName Restore-UjPowerPlanFromBackup -Times 1 -Exactly
+      }
+
+      It 'rejects untrusted restore paths before artifact digests or restore work' {
+        $backupFolder = Join-Path $TestDrive 'untrusted-path-backup'
+        New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+        @{
+          SchemaVersion = $script:UjBackupSchemaVersion
+          ToolName = 'network-diagnostics-suite'
+          Timestamp = '2026-01-01T00:00:00Z'
+          Components = @{}
+          ArtifactDigests = @{}
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupFolder 'backup_manifest.json') -Encoding UTF8
+
+        Mock -CommandName Test-UjBackupPathTrust {
+          [pscustomobject]@{ IsTrusted = $false; Message = 'Backup path owner is not trusted: test' }
+        }
+        Mock -CommandName Test-UjBackupArtifactDigests { throw 'should not run' }
+        Mock -CommandName Restore-UjRegistryFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjQosFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjNicFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjRscFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjPowerPlanFromBackup { throw 'should not run' }
+
+        $result = Restore-UjState -BackupFolder $backupFolder
+
+        $result['Manifest'] | Should -Be 'Warn'
+        Assert-MockCalled -CommandName Test-UjBackupArtifactDigests -Times 0 -Exactly
+      }
+
+      It 'rejects tampered restore artifacts before restore work starts' {
+        $backupFolder = Join-Path $TestDrive 'tampered-backup'
+        New-Item -ItemType Directory -Path $backupFolder -Force | Out-Null
+        $powerPlanPath = Join-Path $backupFolder $script:UjBackupFilePowerplan
+        Set-Content -LiteralPath $powerPlanPath -Value $script:UjPowerPlanGuidBalanced -Encoding UTF8
+        $digests = @{
+          $script:UjBackupFilePowerplan = (Get-FileHash -LiteralPath $powerPlanPath -Algorithm SHA256).Hash
+        }
+        Set-Content -LiteralPath $powerPlanPath -Value $script:UjPowerPlanGuidHighPerformance -Encoding UTF8
+        @{
+          SchemaVersion = $script:UjBackupSchemaVersion
+          ToolName = 'network-diagnostics-suite'
+          Timestamp = '2026-01-01T00:00:00Z'
+          Components = @{ PowerPlan = $true }
+          ArtifactDigests = $digests
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupFolder 'backup_manifest.json') -Encoding UTF8
+
+        Mock -CommandName Restore-UjRegistryFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjQosFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjNicFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjRscFromBackup { throw 'should not run' }
+        Mock -CommandName Restore-UjPowerPlanFromBackup { throw 'should not run' }
+
+        $result = Restore-UjState -BackupFolder $backupFolder
+
+        $result['Manifest'] | Should -Be 'Warn'
+        $result['PowerPlan'] | Should -Be 'Skipped'
+      }
+
       It 'reset removes only owned MMCSS audio values' {
         function Get-NetTCPSetting {}
         $script:UjRegistryPathSystemProfile = '/tmp/SystemProfile'
