@@ -128,6 +128,6 @@ $pesterConfiguration.TestResult.OutputPath = Join-Path $artifactsDir 'testResult
 $pesterConfiguration.Should.ErrorAction = 'Stop'
 
 $pesterResult = Invoke-Pester -Configuration $pesterConfiguration
-if (-not $pesterResult -or $pesterResult.FailedCount -gt 0) {
+if (-not $pesterResult -or ($pesterResult.FailedCount + $pesterResult.FailedBlocksCount + $pesterResult.FailedContainersCount) -gt 0) {
   throw "Pester reported $($pesterResult.FailedCount) failed test(s)."
 }
