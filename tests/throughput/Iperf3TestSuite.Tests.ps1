@@ -215,6 +215,24 @@ Describe 'Iperf3TestSuite helpers' {
       $captured | Should -Contain '-b'
       $captured | Should -Contain '5M'
     }
+
+    It 'marks a zero-exit run without JSON as a parse failure' {
+      InModuleScope Iperf3TestSuite {
+        $caps = $global:Iperf3TestSuite_TestCapability
+        $runner = {
+          param([string[]]$IperfArgs)
+          $null = $IperfArgs
+          $global:LASTEXITCODE = 0
+          return 'iperf3 completed without JSON output'
+        }
+
+        $result = Invoke-Iperf3 -Server 'example' -Port 5201 -Stack 'IPv4' -Duration 1 -Omit 0 -Proto 'TCP' -Dir 'TX' -Caps $caps -Runner $runner
+
+        $result.ExitCode | Should -Be 0
+        $result.Json | Should -Be $null
+        $result.JsonParseError | Should -Match 'JSON output was not found'
+      }
+    }
   }
 
   Context 'Failure handling' {
@@ -848,7 +866,7 @@ exit `$LASTEXITCODE
     It 'requires .json extension for writing' {
       InModuleScope Iperf3TestSuite {
         $noJsonExt = Join-Path $TestDrive 'profiles.txt'
-        { Write-Iperf3ProfilesStore -ProfilesFile $noJsonExt -Store @{ version = 1; updatedUtc = 'now'; profiles = @{} } } | Should -Throw '*.json extension*'
+        { Save-Iperf3Profile -ProfileName 'lab' -ProfilesFile $noJsonExt -Parameters @{ Target = 'example.local' } } | Should -Throw '*.json extension*'
       }
     }
 
@@ -1190,6 +1208,23 @@ exit `$LASTEXITCODE
         @($summary.FailureBreakdown).Count | Should -Be 2
       }
     }
+
+    It 'returns TotalFailure when a zero-exit result lacks required metrics' {
+      InModuleScope Iperf3TestSuite {
+        $results = @(
+          [pscustomobject]@{
+            No = 1; Proto = 'TCP'; Dir = 'TX'; DSCP = 'CS0'; ExitCode = 0
+            JsonParseError = $null; MetricError = 'required throughput metrics missing'; RawText = ''
+          }
+        )
+
+        $summary = Build-RunSummary -Results $results -TestCount 1 -ParseErrorCount 0 -Target 'x' -Port 5201 -Stack 'IPv4' -Timestamp 'ts' -OutDir '/tmp'
+
+        $summary.Status | Should -Be 'TotalFailure'
+        $summary.Counts.Failed | Should -Be 1
+        $summary.FailureBreakdown[0].Reason | Should -Be 'required throughput metrics missing'
+      }
+    }
   }
 
   Context 'CSV row includes Duration_ms column' {
@@ -1377,6 +1412,39 @@ exit `$LASTEXITCODE
     }
   }
 
+  Context 'Write-FinalOutputs artifact contract' {
+    It 'exposes artifact warnings without changing successful measurement status' {
+      InModuleScope Iperf3TestSuite {
+        $csvRows = [System.Collections.Generic.List[object]]::new()
+        $allResults = [System.Collections.Generic.List[object]]::new()
+        $csvRows.Add([pscustomobject]@{ No = 1; Proto = 'TCP'; Dir = 'TX'; DSCP = 'CS0'; Thr_TX_Mbps = 100 }) | Out-Null
+        $allResults.Add([pscustomobject]@{
+            No = 1; Proto = 'TCP'; Dir = 'TX'; DSCP = 'CS0'; ExitCode = 0
+            JsonParseError = $null; MetricError = $null; RawText = ''
+            Metrics = [pscustomobject]@{ TxMbps = 100; RxMbps = $null; Retr = 0; LossPct = $null; JitterMs = $null }
+          }) | Out-Null
+        $final = [pscustomobject]@{ Target = 'x'; Port = 5201; Stack = 'IPv4' }
+        Mock -CommandName Set-Content { throw 'disk full' }
+
+        $result = Write-FinalOutputs `
+          -CsvRowsList $csvRows `
+          -AllResultsList $allResults `
+          -CsvPath (Join-Path $TestDrive 'out.csv') `
+          -JsonPath (Join-Path $TestDrive 'out.json') `
+          -FinalResultObject $final `
+          -OutDir $TestDrive `
+          -Timestamp 'artifact_fail'
+
+        $result.RunSummary.Status | Should -Be 'Success'
+        $result.RunSummary.ArtifactStatus.Complete | Should -BeFalse
+        $result.RunSummary.ArtifactStatus.Json | Should -Be 'Warn'
+        $result.RunSummary.ArtifactStatus.SummaryJson | Should -Be 'Warn'
+        $result.RunSummary.ArtifactStatus.ReportMd | Should -Be 'Warn'
+        $result.RunSummary.ArtifactStatus.RunIndex | Should -Be 'Warn'
+      }
+    }
+  }
+
   # --- Phase 15C: Config helpers and WhatIf flow ---
 
   Context 'ConvertTo-Iperf3IntArray' {
@@ -1435,6 +1503,19 @@ exit `$LASTEXITCODE
       InModuleScope Iperf3TestSuite {
         $cmd = Get-Command Get-TestSuiteConnectivity
         $cmd.Parameters.Keys | Should -Contain 'ConnectTimeoutMs'
+      }
+    }
+  }
+
+  Context 'Get-Iperf3StackFromTcpResult' {
+    It 'uses the remote endpoint address family before hostname text' {
+      InModuleScope Iperf3TestSuite {
+        $tcp = [pscustomobject]@{
+          RemoteAddress = 'dualstack.example'
+          RemoteAddressFamily = 'InterNetworkV6'
+        }
+
+        Get-Iperf3StackFromTcpResult -Tcp $tcp | Should -Be 'IPv6'
       }
     }
   }

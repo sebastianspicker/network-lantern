@@ -13,16 +13,26 @@ source "${BASH_SOURCE[0]%/*}/logging.sh" 2>/dev/null || true
 #   $1 - round name
 #   $2 - test type
 #   $3 - target host
+#   $4 - optional raw command output
 # Output/Returns:
 #   Prints a one-line JSON object with _failed:true to stdout
 append_failed_marker() {
   local round=$1
   local type=$2
   local host=$3
-  printf '{"_failed":true,"round":"%s","type":"%s","host":"%s"}\n' \
-    "$(json_escape "$round")" \
-    "$(json_escape "$type")" \
-    "$(json_escape "$host")"
+  local raw_output=${4:-}
+  if [[ -n "$raw_output" ]]; then
+    printf '{"_failed":true,"round":"%s","type":"%s","host":"%s","raw_output":"%s"}\n' \
+      "$(json_escape "$round")" \
+      "$(json_escape "$type")" \
+      "$(json_escape "$host")" \
+      "$(json_escape "$raw_output")"
+  else
+    printf '{"_failed":true,"round":"%s","type":"%s","host":"%s"}\n' \
+      "$(json_escape "$round")" \
+      "$(json_escape "$type")" \
+      "$(json_escape "$host")"
+  fi
 }
 
 # Run a single MTR test, log results, and update counters.
@@ -84,13 +94,11 @@ execute_single_run() {
     ((RUN_OK++)) || true
     log_line OK "round=$round type=$type host=$host"
   else
-    {
-      append_failed_marker "$round" "$type" "$host"
-      if [[ -s "$CURRENT_TMP" ]]; then
-        cat "$CURRENT_TMP"
-      fi
-      printf '\n'
-    } >>"$JSON_LOG"
+    local raw_output=""
+    if [[ -s "$CURRENT_TMP" ]]; then
+      raw_output=$(<"$CURRENT_TMP")
+    fi
+    append_failed_marker "$round" "$type" "$host" "$raw_output" >>"$JSON_LOG"
 
     ((RUN_FAIL++)) || true
     log_line FAIL "round=$round type=$type host=$host"

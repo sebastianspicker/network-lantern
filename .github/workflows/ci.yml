@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [dev, main]
+    branches: [main]
   pull_request:
-    branches: [dev, main]
+    branches: [main]
   workflow_dispatch:
 
 permissions: {}
@@ -39,6 +39,8 @@ jobs:
           key: psmodules-${{ runner.os }}-pssa-1.24.0-pester-5.7.1
 
       - name: Run local CI
+        env:
+          NDS_INSTALL_MISSING_MODULES: "1"
         run: ./scripts/ci-local.sh
 
   powershell-lint-test:

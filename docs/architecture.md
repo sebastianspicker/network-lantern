@@ -5,7 +5,7 @@
 ```mermaid
 flowchart TD
     ORC["Invoke-NetworkDiagnostics.ps1\n(orchestration)"]
-    CFG["config/hosts.conf\nprofiles/"]
+    CFG["config/hosts.conf\nworkflow profile"]
 
     ORC --> PATH
     ORC --> THRU
@@ -35,7 +35,6 @@ flowchart TD
     WINT --> ART
 ```
 
-
 ## Path
 
 - entrypoints: `apps/path/mtr-test-suite.sh`, `apps/path/NetPathSuite.ps1`
@@ -62,4 +61,7 @@ flowchart TD
 - shell wrapper: `scripts/run-workflow.sh`
 - artifact root: `artifacts/`
 - shared host defaults: `config/hosts.conf`
-- reusable workflow profiles: `profiles/`
+- sanitized workflow example: `profiles/example-office.json`
+- local mutable throughput profile store:
+  `profiles/throughput-profiles.local.json` (ignored)
+- direct throughput module profile store: `.iperf3/profiles.json` (ignored)

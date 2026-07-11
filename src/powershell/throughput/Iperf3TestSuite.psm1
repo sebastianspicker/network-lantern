@@ -278,7 +278,7 @@ function Invoke-Iperf3TestSuite {
 
     if ([bool]$effective['WhatIf']) {
       if (-not $effective['Quiet']) {
-        Write-Information -InformationAction Continue "WhatIf: Would run approximately $($plan.TotalApprox) tests. Target: $($effective['Target']) Port: $($effective['Port'])."
+        Write-Information -InformationAction Continue "WhatIf: Would run approximately $($plan.TotalApprox) tests. Target: $($effective['Target']) Port: $($effective['Port']) Protocol: $($effective['Protocol'])."
         Write-Information -InformationAction Continue "CSV  : $csvPath"
         Write-Information -InformationAction Continue "JSON : $jsonPath"
       }

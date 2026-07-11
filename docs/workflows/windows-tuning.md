@@ -32,4 +32,3 @@ pwsh -File .\apps\windows-tuning\Optimize-NetworkPath.ps1 -Action Restore
 Restore validates the backup manifest before making any changes. Incompatible manifests
 (wrong schema version or tool name) are rejected with a `Warn` result; no destructive work
 is attempted on an incompatible backup.
-

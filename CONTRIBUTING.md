@@ -2,8 +2,9 @@
 
 ## Branch strategy
 
-- `dev` — active integration branch. All feature PRs and fixes target `dev`. CI runs on every push and PR.
-- `main` — release ref. Merged from `dev` via PR only. CI gates `main` identically to `dev`.
+- `main` is the protected integration and release branch.
+- Create a short-lived topic branch from current `main` for each change family.
+- Open pull requests against `main`; CI runs on pushes and pull requests that target it.
 
 Do not push directly to `main`.
 
@@ -24,6 +25,12 @@ Run before publishing:
 ```
 
 If `bats` is not installed locally, install it first or use the Ubuntu CI job as the bash reference surface.
+The Bats regression suite also requires Python 3 for JSON validation.
+
+The local gate requires `git` because the secret scan checks tracked files and
+untracked files that are not ignored. Keep operator output, local profiles,
+tool indexes, and internal work notes in the ignored locations documented in
+the README. Check `git status --short` before publishing.
 
 ## Docs-first updates
 
