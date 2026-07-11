@@ -33,4 +33,8 @@ shellcheck -x \
 bats "$REPO_ROOT/tests/path"
 
 pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/Invoke-SecretScan.ps1"
-pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/ci.ps1" -NoInstall
+ci_args=(-NoInstall)
+if [[ ${NDS_INSTALL_MISSING_MODULES:-0} == 1 ]]; then
+  ci_args=()
+fi
+pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/ci.ps1" "${ci_args[@]}"
