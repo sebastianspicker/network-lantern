@@ -462,7 +462,7 @@ function Backup-UjState {
   if (-not $compAfd) { $backupHadFailure = $true }
 
   try {
-    $policies = Get-UjManagedQosPolicy
+    $policies = Get-UjManagedQosPolicy -ErrorOnFailure
     if ($policies) {
       $policies | Export-CliXml -Path (Join-Path -Path $BackupFolder -ChildPath $script:UjBackupFileQosOurs)
       $manifest.Components['QosPolicies'] = $true

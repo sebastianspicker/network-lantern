@@ -217,7 +217,7 @@ function Update-LogAndStateFromJob {
   if ($Job.State -eq 'Stopped') {
     $Timer.Stop()
     Set-UiBusyState -Form $Form -Busy $false
-    $StatusLabel.Text = 'Cancelled'
+    $StatusLabel.Text = 'Cancelled; iperf3 cleanup unverified'
     Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
     return $true
   }
@@ -230,6 +230,7 @@ function Stop-CurrentRunJob {
     [System.Windows.Forms.Label]$StatusLabel
   )
   if (-not $script:RunJob) { return }
+  $childCleanupVerified = $false
   try {
     # Kill only the iperf3 child process spawned by this job, not all iperf3 instances.
     # PowerShell background jobs do not directly expose child PIDs, so we attempt to
@@ -238,7 +239,11 @@ function Stop-CurrentRunJob {
     if ($script:RunJobIperf3Pid) {
       try {
         $proc = Get-Process -Id $script:RunJobIperf3Pid -ErrorAction SilentlyContinue
-        if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+        if ($proc -and -not $proc.HasExited) {
+          $proc.Kill()
+          $proc.WaitForExit(5000)
+        }
+        $childCleanupVerified = $true
       }
       catch { Write-Verbose "Failed to kill tracked iperf3 process $($script:RunJobIperf3Pid): $($_.Exception.Message)" }
     }
@@ -252,7 +257,9 @@ function Stop-CurrentRunJob {
     $script:RunJob = $null
     $script:RunJobIperf3Pid = $null
     if ($Timer) { $Timer.Tag = $null; $Timer.Stop() }
-    if ($StatusLabel) { $StatusLabel.Text = 'Cancelled' }
+    if ($StatusLabel) {
+      $StatusLabel.Text = if ($childCleanupVerified) { 'Cancelled' } else { 'Cancelled; iperf3 cleanup unverified' }
+    }
   }
 }
 
@@ -594,14 +601,14 @@ $txtTcpWindows.Text = 'default,128K,256K'
 $toolTip.SetToolTip($txtTcpWindows, 'Comma-separated TCP window sizes (e.g., default,128K,256K,512K)')
 $tabRun.Controls.Add($txtTcpWindows)
 
-# Threshold row (0 or -1 = disabled)
+# Threshold row (0 disables minimum throughput; -1 disables maximum loss/jitter)
 $lblThreshHeader = New-Object System.Windows.Forms.Label
-$lblThreshHeader.Text = '(0 or -1 = disabled)'
+$lblThreshHeader.Text = '(0=min off; -1=max off)'
 $lblThreshHeader.Location = New-Object System.Drawing.Point(440, 178)
 $lblThreshHeader.Size = New-Object System.Drawing.Size(140, 18)
 $lblThreshHeader.ForeColor = [System.Drawing.Color]::Gray
 $lblThreshHeader.Font = New-Object System.Drawing.Font($lblThreshHeader.Font, [System.Drawing.FontStyle]::Italic)
-$toolTip.SetToolTip($lblThreshHeader, 'Set thresholds for CI pass/fail. 0 or -1 disables the threshold.')
+$toolTip.SetToolTip($lblThreshHeader, 'Set thresholds for CI pass/fail. 0 disables minimum throughput; -1 disables maximum loss and jitter.')
 $tabRun.Controls.Add($lblThreshHeader)
 
 $lblMinTput = New-Object System.Windows.Forms.Label

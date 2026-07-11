@@ -28,7 +28,7 @@ function Get-UjManagedQosPolicy {
 
 function Remove-UjManagedQosPolicy {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([void])]
+  [OutputType([bool])]
   param()
 
   foreach ($policy in (Get-UjManagedQosPolicy)) {
@@ -83,7 +83,7 @@ function New-UjDscpPolicyByPort {
   if ($DryRun) {
     $actualCount = $effectivePortEnd - [int]$PortStart + 1
     Write-UjInformation -Message ("[DryRun] QoS {0} UDP {1}-{2} DSCP={3} ({4} individual policies)" -f $Name, $PortStart, $effectivePortEnd, $Dscp, $actualCount)
-    return
+    return $true
   }
 
   # Clean up existing policies that match the prefix
@@ -105,14 +105,16 @@ function New-UjDscpPolicyByPort {
       New-NetQosPolicy -Name $policyName -IPPortMatchCondition ([uint16]$port) -IPProtocolMatchCondition UDP -DSCPAction $Dscp -NetworkProfile All -ErrorAction Stop | Out-Null
     } catch {
       Write-Warning -Message ("Could not create a network priority rule for port {0}. Windows may have hit its policy limit. ({1})" -f $port, $_.Exception.Message)
-      break # Stop if we hit a system limit
+      return $false # Stop if we hit a system limit
     }
   }
+
+  return $true
 }
 
 function New-UjDscpPolicyByApp {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([void])]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,
@@ -130,7 +132,7 @@ function New-UjDscpPolicyByApp {
 
   if ($DryRun) {
     Write-UjInformation -Message ("[DryRun] QoS {0} App={1} DSCP={2} (local store)" -f $Name, $ExePath, $Dscp)
-    return
+    return $true
   }
 
   foreach ($existing in (Get-UjManagedQosPolicy | Where-Object { $_.Name -eq $Name })) {
@@ -146,12 +148,14 @@ function New-UjDscpPolicyByApp {
   }
 
   if (-not $PSCmdlet.ShouldProcess($Name, 'Create NetQosPolicy (DSCP by app path)')) {
-    return
+    return $true
   }
 
   try {
     New-NetQosPolicy -Name $Name -AppPathNameMatchCondition $ExePath -DSCPAction $Dscp -NetworkProfile All -ErrorAction Stop | Out-Null
+    return $true
   } catch {
     Write-Warning -Message ("Could not create a network priority rule for '{0}' ({1}). Check that the file path is correct. ({2})" -f $Name, $ExePath, $_.Exception.Message)
+    return $false
   }
 }

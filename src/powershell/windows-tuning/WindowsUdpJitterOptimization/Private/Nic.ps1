@@ -8,7 +8,7 @@ function Get-UjPhysicalUpAdapter {
 
 function Set-UjNicAdvancedPropertyIfSupported {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([void])]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,
@@ -34,18 +34,18 @@ function Set-UjNicAdvancedPropertyIfSupported {
 
   if (-not $property) {
     Write-Verbose -Message ("{0}: property '{1}' (keyword={2}) not found or not supported." -f $Name, $DisplayName, $keyword)
-    return
+    return $true
   }
 
   if ($DryRun) {
     $keywordLabel = if ($keyword) { $keyword } else { 'no-keyword' }
     Write-UjInformation -Message ("[DryRun] {0}: {1} ({2}) => {3}" -f $Name, $DisplayName, $keywordLabel, $Value)
-    return
+    return $true
   }
 
   $targetHint = if ($keyword) { "Keyword: $keyword" } else { "DisplayName: $DisplayName" }
   if (-not $PSCmdlet.ShouldProcess(("{0}: {1}" -f $Name, $DisplayName), ("Set to '{0}' via {1}" -f $Value, $targetHint))) {
-    return
+    return $true
   }
 
   try {
@@ -54,14 +54,16 @@ function Set-UjNicAdvancedPropertyIfSupported {
     } else {
       Set-NetAdapterAdvancedProperty -Name $Name -DisplayName $DisplayName -DisplayValue $Value -NoRestart -ErrorAction Stop | Out-Null
     }
+    return $true
   } catch {
     Write-Warning -Message ("Network adapter '{0}': could not change '{1}'. Your adapter or driver may not support this setting. ({2})" -f $Name, $DisplayName, $_.Exception.Message)
+    return $false
   }
 }
 
 function Set-UjNicConfiguration {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([void])]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [ValidateSet(1, 2, 3)]
@@ -92,16 +94,18 @@ function Set-UjNicConfiguration {
     $adapters = Get-UjPhysicalUpAdapter
   } catch {
     Write-Warning -Message ("Could not detect your network adapters. Make sure you have an active Ethernet connection. ({0})" -f $_.Exception.Message)
-    return
+    return $false
   }
 
+  $allSucceeded = $true
   foreach ($nic in $adapters) {
     Write-UjInformation -Message ("NIC: {0}" -f $nic.Name)
 
     foreach ($keyword in $keywords) {
       $displayName = if ($script:UjNicKeywordReverseMap.ContainsKey($keyword)) { $script:UjNicKeywordReverseMap[$keyword] } else { $keyword }
       $value = if ($specialValues.ContainsKey($keyword)) { $specialValues[$keyword] } else { 'Disabled' }
-      Set-UjNicAdvancedPropertyIfSupported -Name $nic.Name -DisplayName $displayName -Value $value -DryRun:$DryRun
+      $propertySucceeded = Set-UjNicAdvancedPropertyIfSupported -Name $nic.Name -DisplayName $displayName -Value $value -DryRun:$DryRun
+      if ($false -eq $propertySucceeded) { $allSucceeded = $false }
     }
 
     # RSC disable: only with -IncludeExperimental (RSC is TCP-only coalescing)
@@ -117,4 +121,6 @@ function Set-UjNicConfiguration {
       }
     }
   }
+
+  return $allSucceeded
 }

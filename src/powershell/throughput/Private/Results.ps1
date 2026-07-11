@@ -57,6 +57,26 @@ function ConvertTo-Iperf3CsvRow {
   }
 }
 
+function Get-Iperf3MetricError {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param(
+    [Parameter()]
+    [AllowNull()]
+    [pscustomobject]$Metrics
+  )
+
+  if (-not $Metrics) {
+    return 'required throughput metrics missing'
+  }
+
+  if ($null -ne $Metrics.TxMbps -or $null -ne $Metrics.RxMbps) {
+    return $null
+  }
+
+  return 'required throughput metrics missing'
+}
+
 function Add-Iperf3TestResult {
   [CmdletBinding()]
   param(
@@ -93,6 +113,12 @@ function Add-Iperf3TestResult {
     [pscustomobject]$Metrics
   )
   $durationMs = if ($Run.PSObject.Properties.Name -contains 'DurationMs') { $Run.DurationMs } else { $null }
+  $jsonParseError = if ($Run.PSObject.Properties.Name -contains 'JsonParseError') { $Run.JsonParseError } else { $null }
+  $metricError = if ($Run.ExitCode -eq 0 -and -not $jsonParseError) {
+    Get-Iperf3MetricError -Metrics $Metrics
+  } else {
+    $null
+  }
   [void]$AllResultsList.Add([pscustomobject]@{
       No             = $No
       Proto          = $Proto
@@ -110,7 +136,8 @@ function Add-Iperf3TestResult {
       Metrics        = $Metrics
       Args           = $Run.Args
       RawText        = $Run.RawText
-      JsonParseError = if ($Run.PSObject.Properties.Name -contains 'JsonParseError') { $Run.JsonParseError } else { $null }
+      JsonParseError = $jsonParseError
+      MetricError    = $metricError
     })
   [void]$CsvRowsList.Add(
     (ConvertTo-Iperf3CsvRow -No $No -Proto $Proto -Dir $Dir -DSCP $DSCP -Streams $Streams -Win $Window `

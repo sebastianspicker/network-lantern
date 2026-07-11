@@ -69,10 +69,17 @@ function Test-TcpPortAndTrace {
       $task = $client.ConnectAsync($ComputerName, $Port)
       $connected = $task.Wait($TimeoutMs)
       if ($task.IsFaulted) { $null = $task.Exception }
+      $remoteAddress = $ComputerName
+      $remoteAddressFamily = $null
+      if ($connected -and $client.Connected -and $client.Client.RemoteEndPoint -is [System.Net.IPEndPoint]) {
+        $remoteAddress = [string]$client.Client.RemoteEndPoint.Address
+        $remoteAddressFamily = [string]$client.Client.RemoteEndPoint.AddressFamily
+      }
       $tcp = [pscustomobject]@{
-        TcpTestSucceeded = ($connected -and $client.Connected)
-        RemoteAddress    = $ComputerName
-        PingSucceeded    = $null
+        TcpTestSucceeded  = ($connected -and $client.Connected)
+        RemoteAddress     = $remoteAddress
+        RemoteAddressFamily = $remoteAddressFamily
+        PingSucceeded     = $null
       }
     }
     catch {
@@ -85,6 +92,28 @@ function Test-TcpPortAndTrace {
     Write-Verbose "Traceroute not available on non-Windows platforms."
   }
   [pscustomobject]@{ Tcp = $tcp; Trace = $trace }
+}
+
+function Get-Iperf3StackFromTcpResult {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param(
+    [Parameter(Mandatory)]
+    [object]$Tcp
+  )
+
+  if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddressFamily') {
+    switch ([string]$Tcp.RemoteAddressFamily) {
+      'InterNetworkV6' { return 'IPv6' }
+      'InterNetwork' { return 'IPv4' }
+    }
+  }
+
+  $remoteAddress = if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddress') { [string]$Tcp.RemoteAddress } else { '' }
+  if ($remoteAddress -match ':') {
+    return 'IPv6'
+  }
+  return 'IPv4'
 }
 
 function Test-MtuPayload {
@@ -165,7 +194,7 @@ function Get-TestSuiteConnectivity {
     throw "TCP port $Port on '$Target' not reachable. Verify the iperf3 server is running (iperf3 -s -p $Port) and the port is not blocked by a firewall."
   }
   if ($stack -eq 'None') {
-    $stack = if ($net.Tcp.RemoteAddress -match ':') { 'IPv6' } else { 'IPv4' }
+    $stack = Get-Iperf3StackFromTcpResult -Tcp $net.Tcp
     Write-Verbose "Using stack $stack from TCP connection."
   }
   $mtuFails = @()

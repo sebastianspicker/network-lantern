@@ -280,23 +280,44 @@ function Write-FinalOutputs {
   )
   try {
     $CsvRowsList | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8
+    $csvStatus = 'OK'
   }
   catch {
     Write-Warning "Failed to write CSV output to '$CsvPath': $($_.Exception.Message)"
     $CsvPath = $null
+    $csvStatus = 'Warn'
   }
   try {
     $FinalResultObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $JsonPath -Encoding UTF8
+    $jsonStatus = 'OK'
   }
   catch {
     Write-Warning "Failed to write JSON output to '$JsonPath': $($_.Exception.Message)"
     $JsonPath = $null
+    $jsonStatus = 'Warn'
   }
-  $failedCount = @($AllResultsList | Where-Object { $_.ExitCode -ne 0 }).Count
+  $failedCount = @($AllResultsList | Where-Object {
+      $_.ExitCode -ne 0 -or
+      $_.JsonParseError -or
+      ($_.PSObject.Properties.Name -contains 'MetricError' -and $_.MetricError)
+    }).Count
   $parseErrorCount = @($AllResultsList | Where-Object { $_.JsonParseError }).Count
   $runSummary = Build-RunSummary -Results $AllResultsList.ToArray() -TestCount $AllResultsList.Count -ParseErrorCount $parseErrorCount -Target $FinalResultObject.Target -Port $FinalResultObject.Port -Stack $FinalResultObject.Stack -Timestamp $Timestamp -OutDir $OutDir -StartedUtc $StartedUtc -CompletedUtc $CompletedUtc -ElapsedSeconds $ElapsedSeconds -Iperf3Version $Iperf3Version -ThresholdMinThroughputMbps $ThresholdMinThroughputMbps -ThresholdMaxLossPct $ThresholdMaxLossPct -ThresholdMaxJitterMs $ThresholdMaxJitterMs
+  $runSummary.ArtifactStatus.Csv = $csvStatus
+  $runSummary.ArtifactStatus.Json = $jsonStatus
   $supplemental = Write-Iperf3SupplementalReports -RunSummary $runSummary -OutDir $OutDir -Timestamp $Timestamp
+  $runSummary.ArtifactStatus.SummaryJson = $supplemental.SummaryJsonStatus
+  $runSummary.ArtifactStatus.ReportMd = $supplemental.ReportMdStatus
   $runIndexPath = Write-Iperf3RunIndex -OutDir $OutDir -RunSummary $runSummary -CsvPath $CsvPath -JsonPath $JsonPath -SummaryJsonPath $supplemental.SummaryJsonPath -ReportMdPath $supplemental.ReportMdPath
+  $runSummary.ArtifactStatus.RunIndex = if ($runIndexPath) { 'OK' } else { 'Warn' }
+  $artifactStatuses = @(
+    $runSummary.ArtifactStatus.Csv,
+    $runSummary.ArtifactStatus.Json,
+    $runSummary.ArtifactStatus.SummaryJson,
+    $runSummary.ArtifactStatus.ReportMd,
+    $runSummary.ArtifactStatus.RunIndex
+  )
+  $runSummary.ArtifactStatus.Complete = -not ($artifactStatuses -contains 'Warn')
   $runSummary.Supplemental.SummaryJsonPath = $supplemental.SummaryJsonPath
   $runSummary.Supplemental.ReportMdPath = $supplemental.ReportMdPath
   $runSummary.Supplemental.RunIndexPath = $runIndexPath

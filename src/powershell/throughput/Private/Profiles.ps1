@@ -102,56 +102,6 @@ function Read-Iperf3ProfilesStore {
   return $store
 }
 
-function Write-Iperf3ProfilesStore {
-  [CmdletBinding()]
-  [OutputType([void])]
-  param(
-    [Parameter(Mandatory)]
-    [string]$ProfilesFile,
-    [Parameter(Mandatory)]
-    [hashtable]$Store
-  )
-  if (-not $ProfilesFile.EndsWith('.json', [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Profiles file must have a .json extension: $ProfilesFile"
-  }
-  $dir = Split-Path -Parent $ProfilesFile
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-    $null = New-Item -ItemType Directory -Path $dir -Force
-  }
-  $Store['updatedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
-  $json = $Store | ConvertTo-Json -Depth 10
-  # Write to a temp file first, then atomically rename to prevent partial corruption on crash.
-  $tempPath = "$ProfilesFile.tmp"
-  # Use exclusive file lock to prevent concurrent writes (GUI + CLI) from corrupting the store.
-  $maxAttempts = 3
-  $delayMs = 500
-  for ($i = 0; $i -lt $maxAttempts; $i++) {
-    try {
-      $stream = [System.IO.File]::Open($tempPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-      try {
-        $writer = New-Object System.IO.StreamWriter($stream, [System.Text.Encoding]::UTF8)
-        $writer.Write($json)
-        $writer.Flush()
-      }
-      finally {
-        if ($writer) { $writer.Dispose() }
-        $stream.Dispose()
-      }
-      [System.IO.File]::Move($tempPath, $ProfilesFile, $true)
-      return
-    }
-    catch [System.IO.IOException] {
-      if ($i -lt ($maxAttempts - 1)) {
-        Write-Verbose "Profiles file locked, retrying in ${delayMs}ms (attempt $($i + 1)/$maxAttempts)..."
-        Start-Sleep -Milliseconds $delayMs
-      }
-      else {
-        throw "Failed to write profiles file after $maxAttempts attempts (file locked): $ProfilesFile"
-      }
-    }
-  }
-}
-
 function Invoke-LockedProfileOperation {
   <#
   .SYNOPSIS

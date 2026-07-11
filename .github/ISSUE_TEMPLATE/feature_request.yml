@@ -5,7 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion. Please avoid sharing sensitive data.
+        Thanks for the suggestion. Do not share credentials, private hostnames,
+        internal IP addresses, raw route traces, or unsanitized logs.
   - type: textarea
     id: problem
     attributes:
@@ -31,6 +32,6 @@ body:
     id: context
     attributes:
       label: Context
-      description: Any additional context, measurements, or constraints (no secrets).
+      description: Sanitized context, measurements, or constraints only.
     validations:
       required: false

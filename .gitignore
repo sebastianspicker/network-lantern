@@ -7,7 +7,18 @@ test-results/
 TestResults/
 coverage/
 artifacts/
+
+# Local runtime data and operator output
+.iperf3/
 profiles/*.local.json
+logs/
+reports/
+results/
+backups/
+*.reg
+*.clixml
+*.pcap
+*.pcapng
 
 # Secrets and credentials
 .env
@@ -38,12 +49,20 @@ REFACTOR_PLAN.md
 PHYSICS_AUDIT.md
 validation.md
 HANDOFF.md
+docs/archive/
 
 # Task-tracking artifacts
 DONE
 
-# AI tooling
+# Local analysis and AI tooling
 .claude/
+.codegraph/
+.kilo/
+.serena/
+.agents/
+.continue/
+.codacy/codacy.yaml
+.codacy/generated/
 progress.md
 
 # OS / Editor

@@ -21,7 +21,7 @@ The follow-up fix pass implemented the highest-value items from this review:
 | Item | Observed state |
 | --- | --- |
 | Repository state before documentation | `main...origin/main`, clean |
-| Host shell | Windows PowerShell launching commands from `C:\Users\sebastian\Desktop\git\network-diagnostics-suite` |
+| Host shell | Windows PowerShell launching commands from `C:\Users\<user>\Desktop\git\network-diagnostics-suite` |
 | PowerShell | `pwsh` available at `C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.1.0_x64__8wekyb3d8bbwe\pwsh.exe` |
 | Bash | WSL launcher available at `C:\Windows\system32\bash.exe` |
 | Initial missing CLI tools on PATH | `shellcheck`, `bats`, `iperf3` |

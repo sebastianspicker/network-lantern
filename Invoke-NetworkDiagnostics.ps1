@@ -100,15 +100,46 @@ function Get-ProfileSection {
   return @{}
 }
 
+function Write-WorkflowProfileWarnings {
+  param([hashtable]$ProfileMap)
+
+  $knownKeysBySection = @{
+    path          = @('hostsIPv4', 'hostsIPv6', 'protocols', 'rounds')
+    throughput    = @('target', 'port', 'protocol')
+    windowsTuning = @('action', 'profile', 'udpPorts', 'appPaths')
+  }
+
+  foreach ($sectionName in @($ProfileMap.Keys)) {
+    if (-not $knownKeysBySection.ContainsKey($sectionName)) {
+      Write-Warning -Message "Unknown workflow profile section '$sectionName' will be ignored."
+      continue
+    }
+
+    $section = $ProfileMap[$sectionName]
+    if ($section -isnot [hashtable]) {
+      Write-Warning -Message "Workflow profile section '$sectionName' is not an object and will be ignored."
+      continue
+    }
+
+    $knownKeys = @($knownKeysBySection[$sectionName])
+    foreach ($key in @($section.Keys)) {
+      if ($key -notin $knownKeys) {
+        Write-Warning -Message "Unknown workflow profile key '$sectionName.$key' will be ignored."
+      }
+    }
+  }
+}
+
 function Get-EffectiveValue {
   param(
     [object]$ExplicitValue,
+    [bool]$ExplicitValueWasProvided = ($null -ne $ExplicitValue),
     [hashtable]$Section,
     [string]$Key,
     [object]$Fallback = $null
   )
 
-  if ($null -ne $ExplicitValue) {
+  if ($ExplicitValueWasProvided -and $null -ne $ExplicitValue) {
     if ($ExplicitValue -is [array] -and $ExplicitValue.Count -eq 0) {
       if ($Section.ContainsKey($Key)) {
         return $Section[$Key]
@@ -136,6 +167,7 @@ function Get-EffectiveValue {
 }
 
 $workflowProfile = Import-WorkflowProfile -Path $ProfilePath
+Write-WorkflowProfileWarnings -ProfileMap $workflowProfile
 $artifactRoot = Resolve-ArtifactRoot -Path $OutRoot
 $pathSection = Get-ProfileSection -SectionMap $workflowProfile -Name 'path'
 $throughputSection = Get-ProfileSection -SectionMap $workflowProfile -Name 'throughput'
@@ -149,28 +181,28 @@ $pathOutDir = Join-Path $artifactRoot 'path'
 $throughputOutDir = Join-Path $artifactRoot 'throughput'
 
 $effectiveHostsIPv4 = @(
-  Get-EffectiveValue -ExplicitValue $HostsIPv4 -Section $pathSection -Key 'hostsIPv4' -Fallback @()
+  Get-EffectiveValue -ExplicitValue $HostsIPv4 -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('HostsIPv4') -Section $pathSection -Key 'hostsIPv4' -Fallback @()
 )
 $effectiveHostsIPv6 = @(
-  Get-EffectiveValue -ExplicitValue $HostsIPv6 -Section $pathSection -Key 'hostsIPv6' -Fallback @()
+  Get-EffectiveValue -ExplicitValue $HostsIPv6 -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('HostsIPv6') -Section $pathSection -Key 'hostsIPv6' -Fallback @()
 )
 $effectiveProtocols = @(
-  Get-EffectiveValue -ExplicitValue $Protocols -Section $pathSection -Key 'protocols' -Fallback @('IPv4', 'IPv6')
+  Get-EffectiveValue -ExplicitValue $Protocols -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('Protocols') -Section $pathSection -Key 'protocols' -Fallback @('IPv4', 'IPv6')
 )
 $effectiveRounds = @(
-  Get-EffectiveValue -ExplicitValue $Rounds -Section $pathSection -Key 'rounds' -Fallback @()
+  Get-EffectiveValue -ExplicitValue $Rounds -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('Rounds') -Section $pathSection -Key 'rounds' -Fallback @()
 )
-$effectiveIperfTarget = Get-EffectiveValue -ExplicitValue $IperfTarget -Section $throughputSection -Key 'target'
-$effectiveIperfPort = Get-EffectiveValue -ExplicitValue $IperfPort -Section $throughputSection -Key 'port' -Fallback 5201
+$effectiveIperfTarget = Get-EffectiveValue -ExplicitValue $IperfTarget -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('IperfTarget') -Section $throughputSection -Key 'target'
+$effectiveIperfPort = Get-EffectiveValue -ExplicitValue $IperfPort -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('IperfPort') -Section $throughputSection -Key 'port' -Fallback 5201
 $effectiveUdpPorts = @(
-  Get-EffectiveValue -ExplicitValue $UdpPorts -Section $tuningSection -Key 'udpPorts' -Fallback @()
+  Get-EffectiveValue -ExplicitValue $UdpPorts -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('UdpPorts') -Section $tuningSection -Key 'udpPorts' -Fallback @()
 )
 $effectiveAppPaths = @(
-  Get-EffectiveValue -ExplicitValue $AppPaths -Section $tuningSection -Key 'appPaths' -Fallback @()
+  Get-EffectiveValue -ExplicitValue $AppPaths -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('AppPaths') -Section $tuningSection -Key 'appPaths' -Fallback @()
 )
-$effectiveThroughputProtocol = $ThroughputProtocol
-$effectiveTuningAction = $TuningAction
-$effectiveTuningProfile = $TuningProfile
+$effectiveThroughputProtocol = Get-EffectiveValue -ExplicitValue $ThroughputProtocol -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('ThroughputProtocol') -Section $throughputSection -Key 'protocol' -Fallback 'Both'
+$effectiveTuningAction = Get-EffectiveValue -ExplicitValue $TuningAction -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('TuningAction') -Section $tuningSection -Key 'action' -Fallback 'Apply'
+$effectiveTuningProfile = Get-EffectiveValue -ExplicitValue $TuningProfile -ExplicitValueWasProvided $PSBoundParameters.ContainsKey('TuningProfile') -Section $tuningSection -Key 'profile' -Fallback 'Safe'
 $effectiveIncludeAppPolicies = [bool]$IncludeAppPolicies
 $useSkipPathping = [bool]$SkipPathping
 $useDryRun = [bool]$DryRun
@@ -262,7 +294,7 @@ function Invoke-ThroughputWorkflow {
     Port = $effectiveIperfPort
     Protocol = $effectiveThroughputProtocol
     OutDir = $throughputOutDir
-    ProfilesFile = (Join-Path $repoRoot 'profiles/throughput-profiles.json')
+    ProfilesFile = (Join-Path $repoRoot 'profiles/throughput-profiles.local.json')
   }
   if ($Workflow -eq 'Baseline') { $scriptParams['SingleTest'] = $true }
   if ($useDryRun) { $scriptParams['WhatIf'] = $true }
@@ -310,6 +342,8 @@ switch ($Workflow) {
     Invoke-PathWorkflow
     if (-not [string]::IsNullOrWhiteSpace($effectiveIperfTarget)) {
       Invoke-ThroughputWorkflow
+    } else {
+      Write-Warning 'Throughput skipped: IperfTarget not provided for Triage workflow.'
     }
     break
   }
