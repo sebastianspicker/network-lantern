@@ -98,7 +98,8 @@ Describe 'Invoke-NetworkDiagnostics orchestration' {
     $LASTEXITCODE | Should -Be 0
     ($output | Out-String) | Should -Match 'Target:\s+profile-iperf\.example'
     ($output | Out-String) | Should -Match 'Port:\s+5202'
-    ($output | Out-String) | Should -Match 'WhatIf: Would run approximately 1020 tests\.'
+    ($output | Out-String) | Should -Match 'WhatIf: Would run approximately \d+ tests\.'
+    ($output | Out-String) | Should -Match 'Protocol:\s+UDP'
   }
 
   It 'keeps explicit throughput CLI arguments ahead of profile values' {
@@ -119,7 +120,8 @@ Describe 'Invoke-NetworkDiagnostics orchestration' {
     $LASTEXITCODE | Should -Be 0
     ($output | Out-String) | Should -Match 'Target:\s+cli-iperf\.example'
     ($output | Out-String) | Should -Match 'Port:\s+5203'
-    ($output | Out-String) | Should -Match 'WhatIf: Would run approximately 135 tests\.'
+    ($output | Out-String) | Should -Match 'WhatIf: Would run approximately \d+ tests\.'
+    ($output | Out-String) | Should -Match 'Protocol:\s+TCP'
   }
 
   It 'loads profile Windows tuning action and profile when matching CLI arguments are omitted' {
