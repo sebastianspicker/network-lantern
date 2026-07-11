@@ -168,10 +168,16 @@ function Invoke-NetworkPathTuning {
 
     if ($normalizedPorts.Count -gt 0) {
       try {
+        $qosPortPoliciesSucceeded = $true
         foreach ($port in $normalizedPorts) {
-          New-UjDscpPolicyByPort -Name ("NDS_QOS_PORT_{0}" -f $port) -PortStart $port -PortEnd $port -Dscp $Dscp -DryRun:$DryRun
+          $policyResult = New-UjDscpPolicyByPort -Name ("NDS_QOS_PORT_{0}" -f $port) -PortStart $port -PortEnd $port -Dscp $Dscp -DryRun:$DryRun
+          if ($false -eq $policyResult) { $qosPortPoliciesSucceeded = $false }
         }
-        $components['QosPortPolicies'] = if ($DryRun) { 'Skipped' } else { 'OK' }
+        $components['QosPortPolicies'] = if ($DryRun) { 'Skipped' } elseif ($qosPortPoliciesSucceeded) { 'OK' } else { 'Warn' }
+        if (-not $DryRun -and -not $qosPortPoliciesSucceeded) {
+          $warnings.Add('QosPortPolicies failed: one or more port policies could not be created.') | Out-Null
+          $success = $false
+        }
       } catch {
         $warnings.Add("QosPortPolicies failed: $($_.Exception.Message)") | Out-Null
         $components['QosPortPolicies'] = 'Warn'
@@ -184,11 +190,17 @@ function Invoke-NetworkPathTuning {
     if ($IncludeAppPolicies -and $normalizedApps.Count -gt 0) {
       try {
         $i = 0
+        $qosAppPoliciesSucceeded = $true
         foreach ($path in $normalizedApps) {
           $i++
-          New-UjDscpPolicyByApp -Name ("NDS_QOS_APP_{0}" -f $i) -ExePath $path -Dscp $Dscp -DryRun:$DryRun
+          $appPolicyResult = New-UjDscpPolicyByApp -Name ("NDS_QOS_APP_{0}" -f $i) -ExePath $path -Dscp $Dscp -DryRun:$DryRun
+          if ($false -eq $appPolicyResult) { $qosAppPoliciesSucceeded = $false }
         }
-        $components['QosAppPolicies'] = if ($DryRun) { 'Skipped' } else { 'OK' }
+        $components['QosAppPolicies'] = if ($DryRun) { 'Skipped' } elseif ($qosAppPoliciesSucceeded) { 'OK' } else { 'Warn' }
+        if (-not $DryRun -and -not $qosAppPoliciesSucceeded) {
+          $warnings.Add('QosAppPolicies failed: one or more app policies could not be created.') | Out-Null
+          $success = $false
+        }
       } catch {
         $warnings.Add("QosAppPolicies failed: $($_.Exception.Message)") | Out-Null
         $components['QosAppPolicies'] = 'Warn'
@@ -200,8 +212,12 @@ function Invoke-NetworkPathTuning {
 
     if ($TuningProfile -eq 'Measured') {
       try {
-        Set-UjNicConfiguration -Preset 1 -DryRun:$DryRun
-        $components['NicPowerSaving'] = if ($DryRun) { 'Skipped' } else { 'OK' }
+        $nicResult = Set-UjNicConfiguration -Preset 1 -DryRun:$DryRun
+        $components['NicPowerSaving'] = if ($DryRun) { 'Skipped' } elseif ($false -eq $nicResult) { 'Warn' } else { 'OK' }
+        if (-not $DryRun -and $false -eq $nicResult) {
+          $warnings.Add('NicPowerSaving failed: one or more NIC settings could not be changed.') | Out-Null
+          $success = $false
+        }
       } catch {
         $warnings.Add("NicPowerSaving failed: $($_.Exception.Message)") | Out-Null
         $components['NicPowerSaving'] = 'Warn'
@@ -214,8 +230,12 @@ function Invoke-NetworkPathTuning {
     $effectivePowerPlan = if ($PowerPlan -eq 'None' -and $TuningProfile -eq 'Measured') { 'HighPerformance' } else { $PowerPlan }
     if ($effectivePowerPlan -ne 'None') {
       try {
-        Set-UjPowerPlan -PowerPlan $effectivePowerPlan -DryRun:$DryRun
-        $components['PowerPlan'] = if ($DryRun) { 'Skipped' } else { 'OK' }
+        $powerPlanResult = Set-UjPowerPlan -PowerPlan $effectivePowerPlan -DryRun:$DryRun
+        $components['PowerPlan'] = if ($DryRun) { 'Skipped' } elseif ($false -eq $powerPlanResult) { 'Warn' } else { 'OK' }
+        if (-not $DryRun -and $false -eq $powerPlanResult) {
+          $warnings.Add('PowerPlan failed: the selected power plan could not be activated.') | Out-Null
+          $success = $false
+        }
       } catch {
         $warnings.Add("PowerPlan failed: $($_.Exception.Message)") | Out-Null
         $components['PowerPlan'] = 'Warn'

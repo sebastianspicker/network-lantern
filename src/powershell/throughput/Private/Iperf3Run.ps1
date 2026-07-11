@@ -140,6 +140,8 @@ function Invoke-Iperf3 {
   if ($null -ne $jsonText) {
     try { $jsonObj = ConvertFrom-Json -InputObject $jsonText }
     catch { Write-Verbose "JSON parse failed: $($_.Exception.Message)"; $jsonObj = $null; $jsonParseError = $_.Exception.Message }
+  } elseif ($exitCode -eq 0) {
+    $jsonParseError = 'iperf3 JSON output was not found.'
   }
   return [pscustomobject]@{
     Args           = $iperfArgs

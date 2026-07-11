@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
 
-if [[ -f .gitmodules ]] && git config -f .gitmodules --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1; then
-	echo "Initializing test submodules..."
-	git submodule update --init --recursive
-else
-	echo "No test submodules are configured; skipping submodule initialization."
+missing=()
+for tool in shellcheck bats python3 pwsh; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    missing+=("$tool")
+  fi
+done
+
+if ((${#missing[@]} == 0)); then
+  echo "Required local test tools are already available: shellcheck, bats, python3, pwsh."
+  echo "Run the local gate with: ./scripts/ci-local.sh"
+  exit 0
 fi
 
-echo "Install shellcheck and bats with your platform package manager, or provide them on PATH."
-echo "Run tests with: bats tests/path"
+echo "Missing local test tools: ${missing[*]}" >&2
+echo >&2
+echo "Install them with your system package manager, for example:" >&2
+echo "  macOS/Homebrew: brew install shellcheck bats-core python powershell/tap/powershell" >&2
+echo "  Debian/Ubuntu:  sudo apt-get install shellcheck bats python3 && install PowerShell 7+" >&2
+echo >&2
+echo "After installation, run: ./scripts/ci-local.sh" >&2
+exit 1

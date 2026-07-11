@@ -33,20 +33,35 @@ function Invoke-HostDiagnostics {
   $portFindings = @(foreach ($t in $PortTargets) {
     if ($t.Protocol -eq 'TCP') {
       $tcp = Test-TcpPort -HostName $h -Port $t.Port -Hops 10 -Protocol $proto
+      $tcpOpen = [bool]$tcp.TcpTestSucceeded
       [pscustomobject]@{
         Name = $t.Name
         Protocol = 'TCP'
         Port = $t.Port
-        Success = [bool]$tcp.TcpTestSucceeded
+        Success = $tcpOpen
+        PathReachable = $tcpOpen
+        ServiceOpen = $tcpOpen
+        ServiceStatus = if ($tcpOpen) { 'Open' } else { 'ClosedOrFiltered' }
         Note = 'Test-NetConnection'
       }
     } else {
       $udp = Test-UdpPortBestEffort -HostName $h -Port $t.Port -Protocol $proto -TimeoutMs 2000
+      $udpReachable = if ($udp.Status -in @('Likely reachable', 'Path OK, port closed')) { $true } else { $false }
+      $udpOpen = ($udp.Status -eq 'Likely reachable')
+      $udpServiceStatus = switch ($udp.Status) {
+        'Likely reachable' { 'OpenOrResponsive' }
+        'Path OK, port closed' { 'Closed' }
+        'Likely filtered' { 'FilteredOrNoResponse' }
+        default { 'Unknown' }
+      }
       [pscustomobject]@{
         Name = $t.Name
         Protocol = 'UDP'
         Port = $t.Port
-        Success = ($udp.Status -eq 'Likely reachable')
+        Success = $udpOpen
+        PathReachable = $udpReachable
+        ServiceOpen = $udpOpen
+        ServiceStatus = $udpServiceStatus
         Note = "$($udp.Status): $($udp.Detail)"
       }
     }

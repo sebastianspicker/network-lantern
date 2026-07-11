@@ -1,6 +1,6 @@
 function Set-UjSystemResponsiveness {
   [CmdletBinding(SupportsShouldProcess = $true)]
-  [OutputType([void])]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [ValidateSet(1, 2, 3)]
@@ -217,11 +217,11 @@ function Set-UjPowerPlan {
 
   if ($DryRun) {
     Write-UjInformation -Message ("[DryRun] powercfg /S {0}" -f $guid)
-    return
+    return $true
   }
 
   if (-not $PSCmdlet.ShouldProcess($PowerPlan, 'Set active power plan')) {
-    return
+    return $true
   }
 
   if ($PowerPlan -eq 'Ultimate') {
@@ -239,7 +239,10 @@ function Set-UjPowerPlan {
   $null = & powercfg /S $guid 2>&1
   if ($LASTEXITCODE -ne 0) {
     Write-Warning -Message ("Could not switch your power plan. The selected plan may not be available on this PC (error code {0})." -f $LASTEXITCODE)
+    return $false
   }
+
+  return $true
 }
 
 function Set-UjGameDvrState {

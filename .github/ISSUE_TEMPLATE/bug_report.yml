@@ -1,17 +1,18 @@
 name: Bug report
-description: Report a problem with the optimization script or module
+description: Report a problem with the network diagnostics suite
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug. Please avoid sharing sensitive data (keys, tokens, personal info).
+        Thanks for reporting a bug. Do not share credentials, private hostnames,
+        internal IP addresses, raw route traces, or unsanitized logs.
   - type: textarea
     id: summary
     attributes:
       label: Summary
       description: What happened? Include a short, clear description.
-      placeholder: Example: DryRun still changed a registry value...
+      placeholder: "Example: DryRun still changed a registry value..."
     validations:
       required: true
   - type: textarea
@@ -43,7 +44,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Provide non-sensitive environment details.
+      description: Provide only sanitized, non-sensitive environment details.
       value: |
         - OS:
         - PowerShell version (pwsh -v):

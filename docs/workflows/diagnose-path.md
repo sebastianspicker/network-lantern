@@ -32,4 +32,3 @@ The process exits 1 if any result has `OverallStatus = Fail`.
 - where do latency and loss increase?
 - does TCP succeed where ICMP fails?
 - is the path stable across rounds?
-

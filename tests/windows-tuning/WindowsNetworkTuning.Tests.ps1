@@ -93,6 +93,51 @@ Describe 'Windows network tuning module' {
     }
   }
 
+  Context 'Apply helper failure status' {
+    InModuleScope WindowsUdpJitterOptimization {
+      It 'New-UjDscpPolicyByPort returns false when policy creation fails' {
+        function New-NetQosPolicy { throw 'policy limit' }
+        Mock -CommandName Get-UjManagedQosPolicy { @() }
+        Mock -CommandName New-NetQosPolicy { throw 'policy limit' }
+
+        $result = New-UjDscpPolicyByPort -Name 'NDS_QOS_PORT_5201' -PortStart 5201 -PortEnd 5201 -Confirm:$false
+
+        $result | Should -BeOfType [bool]
+        $result | Should -BeFalse
+      }
+
+      It 'New-UjDscpPolicyByApp returns false when policy creation fails' {
+        function New-NetQosPolicy { throw 'policy limit' }
+        Mock -CommandName Get-UjManagedQosPolicy { @() }
+        Mock -CommandName New-NetQosPolicy { throw 'policy limit' }
+
+        $result = New-UjDscpPolicyByApp -Name 'NDS_QOS_APP_1' -ExePath 'C:\app\test.exe' -Confirm:$false
+
+        $result | Should -BeOfType [bool]
+        $result | Should -BeFalse
+      }
+
+      It 'Set-UjPowerPlan returns false when powercfg cannot switch plans' {
+        function powercfg {
+          $global:LASTEXITCODE = 1
+          'failed'
+        }
+
+        $result = Set-UjPowerPlan -PowerPlan HighPerformance -Confirm:$false
+
+        $result | Should -BeOfType [bool]
+        $result | Should -BeFalse
+      }
+
+      It 'Set-UjNicConfiguration returns false when adapters cannot be detected' {
+        $result = Set-UjNicConfiguration -Preset 1 -Confirm:$false
+
+        $result | Should -BeOfType [bool]
+        $result | Should -BeFalse
+      }
+    }
+  }
+
   Context 'Restore safety and reset scope' {
     InModuleScope WindowsUdpJitterOptimization {
       It 'rejects missing backup manifests before restore work starts' {
@@ -289,7 +334,10 @@ Describe 'Windows network tuning module' {
     $output = & pwsh -NoLogo -NoProfile -File $scriptPath 2>&1
 
     $LASTEXITCODE | Should -Be 0
-    ($output | Out-String) | Should -Match 'CLI-first'
+    $message = $output | Out-String
+    $message | Should -Match 'CLI-first'
+    $message | Should -Match 'compatibility entrypoint'
+    $message | Should -Match 'does not launch a GUI'
   }
 
   Context 'Backup action' {
@@ -307,6 +355,42 @@ Describe 'Windows network tuning module' {
         $result.DryRun | Should -BeTrue
         $result.Success | Should -BeTrue
         $result.Components['Backup'] | Should -Be 'OK'
+      }
+
+      It 'marks backup incomplete when QoS policies cannot be read' {
+        $backupFolder = Join-Path $TestDrive 'qos-read-failure-backup'
+        try {
+          [Microsoft.PowerShell.Cmdletization.GeneratedTypes.NetAdapter.NetAdapter] | Out-Null
+        } catch {
+          Add-Type -TypeDefinition @'
+namespace Microsoft.PowerShell.Cmdletization.GeneratedTypes.NetAdapter {
+  public class NetAdapter {}
+}
+'@
+        }
+        function Get-NetAdapterRsc {}
+        function powercfg {
+          $global:LASTEXITCODE = 1
+          @()
+        }
+
+        Mock -CommandName Export-UjRegistryKey { $true }
+        Mock -CommandName Get-UjManagedQosPolicy {
+          param([switch]$ErrorOnFailure)
+          if ($ErrorOnFailure) {
+            throw 'qos read failed'
+          }
+          @()
+        }
+        Mock -CommandName Get-UjPhysicalUpAdapter { @() }
+        Mock -CommandName Get-NetAdapterRsc { @() }
+
+        $result = Backup-UjState -BackupFolder $backupFolder -Confirm:$false
+        $manifest = Get-Content -LiteralPath (Join-Path $backupFolder 'backup_manifest.json') -Raw |
+          ConvertFrom-Json
+
+        $result.Status | Should -Be 'Warn'
+        $manifest.Components.QosPolicies | Should -BeFalse
       }
     }
   }

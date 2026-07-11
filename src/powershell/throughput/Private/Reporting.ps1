@@ -29,7 +29,11 @@ function Build-RunSummary {
     [nullable[double]]$ThresholdMaxLossPct,
     [nullable[double]]$ThresholdMaxJitterMs
   )
-  $failed = @($Results | Where-Object { $_.ExitCode -ne 0 })
+  $failed = @($Results | Where-Object {
+      $_.ExitCode -ne 0 -or
+      $_.JsonParseError -or
+      ($_.PSObject.Properties.Name -contains 'MetricError' -and $_.MetricError)
+    })
   $succeededCount = $TestCount - $failed.Count
   if ($succeededCount -lt 0) { $succeededCount = 0 }
   $status = if ($TestCount -eq 0 -or $failed.Count -eq $TestCount) { 'TotalFailure' } elseif ($failed.Count -gt 0) { 'PartialFailure' } else { 'Success' }
@@ -49,6 +53,7 @@ function Build-RunSummary {
           DSCP           = $_.DSCP
           ExitCode       = $_.ExitCode
           JsonParseError = $_.JsonParseError
+          MetricError    = if ($_.PSObject.Properties.Name -contains 'MetricError') { $_.MetricError } else { $null }
         }
       }
   )
@@ -57,7 +62,9 @@ function Build-RunSummary {
   $hasThresholds = ($null -ne $ThresholdMinThroughputMbps) -or ($null -ne $ThresholdMaxLossPct) -or ($null -ne $ThresholdMaxJitterMs)
   if ($hasThresholds) {
     foreach ($r in $Results) {
-      if ($r.ExitCode -ne 0) { continue }  # only evaluate succeeded tests
+      if ($r.ExitCode -ne 0 -or
+          $r.JsonParseError -or
+          ($r.PSObject.Properties.Name -contains 'MetricError' -and $r.MetricError)) { continue }  # only evaluate succeeded tests
       $m = $r.Metrics
       if (-not $m) { continue }
       $reasons = @()
@@ -108,6 +115,7 @@ function Build-RunSummary {
       $groups = @{}
       foreach ($f in $failed) {
         $reason = if ($f.JsonParseError) { 'JSON parse error' }
+                  elseif ($f.PSObject.Properties.Name -contains 'MetricError' -and $f.MetricError) { $f.MetricError }
                   elseif ($f.RawText -match 'unable to connect|connection refused') { 'connection refused' }
                   elseif ($f.RawText -match 'timed out|timeout') { 'timeout' }
                   elseif ($f.ExitCode -ne 0) { "iperf3 exit $($f.ExitCode)" }
@@ -121,6 +129,14 @@ function Build-RunSummary {
     ThresholdBreaches   = $thresholdBreaches
     ThresholdBreachCount = $thresholdBreaches.Count
     TopFailures     = $topFailures
+    ArtifactStatus  = [pscustomobject]@{
+      Csv         = 'Pending'
+      Json        = 'Pending'
+      SummaryJson = 'Pending'
+      ReportMd    = 'Pending'
+      RunIndex    = 'Pending'
+      Complete    = $false
+    }
     Supplemental    = [pscustomobject]@{
       SummaryJsonPath = $null
       ReportMdPath    = $null
@@ -195,8 +211,10 @@ function Write-Iperf3SupplementalReports {
   }
 
   return [pscustomobject]@{
-    SummaryJsonPath = $summaryPath
-    ReportMdPath    = $reportPath
+    SummaryJsonPath   = $summaryPath
+    ReportMdPath      = $reportPath
+    SummaryJsonStatus = if ($summaryPath) { 'OK' } else { 'Warn' }
+    ReportMdStatus    = if ($reportPath) { 'OK' } else { 'Warn' }
   }
 }
 
@@ -209,8 +227,10 @@ function Write-Iperf3RunIndex {
     [Parameter(Mandatory)]
     [pscustomobject]$RunSummary,
     [Parameter(Mandatory)]
+    [AllowNull()][AllowEmptyString()]
     [string]$CsvPath,
     [Parameter(Mandatory)]
+    [AllowNull()][AllowEmptyString()]
     [string]$JsonPath,
     [Parameter(Mandatory)]
     [AllowNull()][AllowEmptyString()][string]$SummaryJsonPath,

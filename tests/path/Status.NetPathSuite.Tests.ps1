@@ -46,6 +46,24 @@ Describe 'NetPathSuite status modeling' {
     $result.FailedStages | Should -Contain 'Ping'
   }
 
+  It 'distinguishes UDP path reachability from closed service ports' {
+    Mock Invoke-PingRaw { [pscustomobject]@{ Raw = @('ping'); ExitCode = 0 } }
+    Mock Invoke-TracertRaw { [pscustomobject]@{ Raw = @('tracert'); ExitCode = 0 } }
+    Mock Invoke-PathpingRaw { [pscustomobject]@{ Raw = @('pathping'); ExitCode = 0 } }
+    Mock Test-TcpPort { [pscustomobject]@{ TcpTestSucceeded = $true; TraceRoute = @() } }
+    Mock Test-UdpPortBestEffort { [pscustomobject]@{ Status = 'Path OK, port closed'; Detail = 'ICMP Port Unreachable received' } }
+
+    $round = (Get-RoundDefinitions -TraceMaxHops 30 -TraceTimeoutMs 5000 -PathpingProbes 50 -PathpingTimeoutMs 3000 | Select-Object -First 1)
+    $result = Invoke-HostDiagnostics -PlanItem ([pscustomobject]@{ RoundDef = $round; Protocol = 'IPv4'; Host = 'example.local' }) -PortTargets @([pscustomobject]@{ Name = 'Demo'; Protocol = 'UDP'; Port = 9999 }) -Settings ([pscustomobject]@{ PingCount = 5; SkipPathping = $false })
+
+    $result.Ports[0].Success | Should -BeFalse
+    $result.Ports[0].PathReachable | Should -BeTrue
+    $result.Ports[0].ServiceOpen | Should -BeFalse
+    $result.Ports[0].ServiceStatus | Should -Be 'Closed'
+    $result.PortsStatus | Should -Be 'Fail'
+    $result.OverallStatus | Should -Be 'Fail'
+  }
+
   It 'writes explicit stage status columns to CSV output' {
     $jsonPath = Join-Path $TestDrive 'result.json'
     $csvPath = Join-Path $TestDrive 'result.csv'

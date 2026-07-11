@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Repository hygiene
+
+- Keep mutable throughput profiles in ignored local state instead of a tracked
+  JSON store.
+- Exclude internal audit work, assistant plans, local indexes, operational
+  output, packet captures, and tuning exports from the public repository.
+- Make the local secret scan inspect Git publication candidates so ignored tool
+  state and non-source sockets do not break verification.
+- Align contributor, CI, security, architecture, and operator documentation
+  with `main` as the current integration branch and the current local layout.
+
 ## v1.0.0 — 2026-04-18
 
 ### Added

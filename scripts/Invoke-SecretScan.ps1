@@ -3,8 +3,8 @@
 Lightweight secret scan over the repository (no output of matches).
 
 .DESCRIPTION
-Scans files for common secret patterns. Excludes .git directory (path-agnostic).
-Use in CI and locally; exits with 1 if any pattern is found.
+Scans tracked files and untracked files that are not ignored by Git for common
+secret patterns. Use in CI and locally; exits with 1 if any pattern is found.
 #>
 [CmdletBinding()]
 param(
@@ -38,35 +38,41 @@ $patterns = @(
 $hitCount = 0
 $selfName = [System.IO.Path]::GetFileName($MyInvocation.MyCommand.Path)
 $binaryExts = @('.exe','.dll','.zip','.gz','.tar','.png','.jpg','.gif','.ico','.woff','.woff2','.ttf','.eot','.pdf')
-$resolvedPath = [System.IO.Path]::GetFullPath($Path)
-$gitDir = Join-Path $resolvedPath '.git'
+$root = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+$git = Get-Command -Name git -ErrorAction SilentlyContinue
 
-if ((Test-Path -LiteralPath $gitDir) -and (Get-Command -Name git -ErrorAction SilentlyContinue)) {
-  $trackedPaths = & git -C $resolvedPath ls-files -z
-  $files = @($trackedPaths -split "`0" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object {
-      $candidate = Join-Path $resolvedPath $_
-      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        Get-Item -LiteralPath $candidate
-      }
-    })
-} else {
-  $files = Get-ChildItem -LiteralPath $resolvedPath -Recurse -File -Force -ErrorAction SilentlyContinue |
-    Where-Object {
-      $full = $_.FullName
-      $parts = $full.Split([IO.Path]::DirectorySeparatorChar)
-      $parts -notcontains '.git' -and
-        $parts -notcontains '.cache' -and
-        $parts -notcontains 'artifacts'
+if ((Test-Path -LiteralPath (Join-Path $root '.git')) -and $git) {
+  $relativeFiles = @(& $git.Source -C $root ls-files --cached --others --exclude-standard)
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Could not enumerate Git publication candidates for secret scanning.'
+  }
+  $files = @(
+    foreach ($relativeFile in $relativeFiles) {
+      $fullPath = Join-Path -Path $root -ChildPath $relativeFile
+      if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) { continue }
+      Get-Item -LiteralPath $fullPath -Force -ErrorAction Stop
     }
+  )
+} else {
+  $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue |
+      Where-Object {
+        $parts = $_.FullName.Split([IO.Path]::DirectorySeparatorChar)
+        $parts -notcontains '.git' -and
+          $parts -notcontains '.cache' -and
+          $parts -notcontains 'artifacts'
+      })
 }
 
-$files = @($files | Where-Object {
-    $_.Name -ne $selfName -and
-      $_.Extension -notin $binaryExts
-  })
+$files = @(
+  $files | Where-Object {
+    $_.Name -ne $selfName -and $_.Extension -notin $binaryExts
+  }
+)
 
 foreach ($pattern in $patterns) {
-  $hits = $files | Select-String -Pattern $pattern
+  $hits = if ($files.Count -gt 0) {
+    $files | Select-String -Pattern $pattern
+  }
   if ($hits) {
     $hitCount += $hits.Count
   }
