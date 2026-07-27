@@ -1,4 +1,4 @@
-# Orchestration helpers for Invoke-Iperf3TestSuite (private to Iperf3TestSuite)
+# Orchestration helpers for Measure-NetworkThroughput (private to NetworkLantern.Throughput)
 
 function Build-TestPlan {
   [CmdletBinding()]
@@ -280,31 +280,72 @@ function Write-FinalOutputs {
   )
   try {
     $CsvRowsList | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8
+    $csvStatus = 'OK'
   }
   catch {
     Write-Warning "Failed to write CSV output to '$CsvPath': $($_.Exception.Message)"
     $CsvPath = $null
+    $csvStatus = 'Warn'
   }
   try {
     $FinalResultObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $JsonPath -Encoding UTF8
+    $jsonStatus = 'OK'
   }
   catch {
     Write-Warning "Failed to write JSON output to '$JsonPath': $($_.Exception.Message)"
     $JsonPath = $null
+    $jsonStatus = 'Warn'
   }
-  $failedCount = @($AllResultsList | Where-Object { $_.ExitCode -ne 0 }).Count
+  $failedCount = @($AllResultsList | Where-Object {
+      $_.ExitCode -ne 0 -or
+      $_.JsonParseError -or
+      ($_.PSObject.Properties.Name -contains 'MetricError' -and $_.MetricError)
+    }).Count
   $parseErrorCount = @($AllResultsList | Where-Object { $_.JsonParseError }).Count
   $runSummary = Build-RunSummary -Results $AllResultsList.ToArray() -TestCount $AllResultsList.Count -ParseErrorCount $parseErrorCount -Target $FinalResultObject.Target -Port $FinalResultObject.Port -Stack $FinalResultObject.Stack -Timestamp $Timestamp -OutDir $OutDir -StartedUtc $StartedUtc -CompletedUtc $CompletedUtc -ElapsedSeconds $ElapsedSeconds -Iperf3Version $Iperf3Version -ThresholdMinThroughputMbps $ThresholdMinThroughputMbps -ThresholdMaxLossPct $ThresholdMaxLossPct -ThresholdMaxJitterMs $ThresholdMaxJitterMs
-  $supplemental = Write-Iperf3SupplementalReports -RunSummary $runSummary -OutDir $OutDir -Timestamp $Timestamp
-  $runIndexPath = Write-Iperf3RunIndex -OutDir $OutDir -RunSummary $runSummary -CsvPath $CsvPath -JsonPath $JsonPath -SummaryJsonPath $supplemental.SummaryJsonPath -ReportMdPath $supplemental.ReportMdPath
-  $runSummary.Supplemental.SummaryJsonPath = $supplemental.SummaryJsonPath
+  $runSummary.ArtifactStatus.Csv = $csvStatus
+  $runSummary.ArtifactStatus.Json = $jsonStatus
+  # Create the human-readable report first, but persist the summary JSON only
+  # after every artifact status and supplemental path is final.
+  $supplemental = Write-Iperf3SupplementalReports -RunSummary $runSummary -OutDir $OutDir -Timestamp $Timestamp -DeferSummaryJson
+  $summaryWritePath = Join-Path -Path $OutDir -ChildPath "iperf3_summary_$Timestamp.json"
+  $summaryJsonPath = $null
+  $runSummary.ArtifactStatus.ReportMd = $supplemental.ReportMdStatus
+  $runSummary.Supplemental.SummaryJsonPath = $null
   $runSummary.Supplemental.ReportMdPath = $supplemental.ReportMdPath
+  # The report and run index deliberately omit the summary path until that leaf
+  # exists. This prevents durable references to a summary whose final write fails.
+  $runIndexPath = Write-Iperf3RunIndex -OutDir $OutDir -RunSummary $runSummary -CsvPath $CsvPath -JsonPath $JsonPath -SummaryJsonPath $null -ReportMdPath $supplemental.ReportMdPath
+  $runSummary.ArtifactStatus.RunIndex = if ($runIndexPath) { 'OK' } else { 'Warn' }
   $runSummary.Supplemental.RunIndexPath = $runIndexPath
+  # The atomic write below is the final operation. Mark its intended success in
+  # the serialized object, then downgrade the in-memory result if the write fails.
+  $runSummary.ArtifactStatus.SummaryJson = 'OK'
+  $artifactStatuses = @(
+    $runSummary.ArtifactStatus.Csv,
+    $runSummary.ArtifactStatus.Json,
+    $runSummary.ArtifactStatus.SummaryJson,
+    $runSummary.ArtifactStatus.ReportMd,
+    $runSummary.ArtifactStatus.RunIndex
+  )
+  $runSummary.ArtifactStatus.Complete = -not ($artifactStatuses -contains 'Warn')
+  try {
+    $summaryJsonPath = $summaryWritePath
+    $runSummary.Supplemental.SummaryJsonPath = $summaryJsonPath
+    Set-Iperf3JsonFileAtomic -Path $summaryWritePath -InputObject $runSummary
+  }
+  catch {
+    Write-Warning "Failed to write summary JSON: $_"
+    $summaryJsonPath = $null
+    $runSummary.ArtifactStatus.SummaryJson = 'Warn'
+    $runSummary.ArtifactStatus.Complete = $false
+    $runSummary.Supplemental.SummaryJsonPath = $null
+  }
   return [pscustomobject]@{
     FailedCount      = $failedCount
     ParseErrorCount  = $parseErrorCount
     RunSummary       = $runSummary
-    SummaryJsonPath  = $supplemental.SummaryJsonPath
+    SummaryJsonPath  = $summaryJsonPath
     ReportMdPath     = $supplemental.ReportMdPath
     RunIndexPath     = $runIndexPath
   }

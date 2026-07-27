@@ -1,5 +1,5 @@
 PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
-PATH_APP="$PROJECT_ROOT/apps/path/mtr-test-suite.sh"
+export PATH_APP="$PROJECT_ROOT/apps/path/test-network-path.sh"
 
 assert_success() {
   [ "$status" -eq 0 ]

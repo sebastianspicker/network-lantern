@@ -11,7 +11,7 @@ function Invoke-HostDiagnostics {
   #>
   param(
     [Parameter(Mandatory)][object]$PlanItem,
-    [Parameter(Mandatory)][array]$PortTargets,
+    [Parameter(Mandatory)][AllowEmptyCollection()][array]$PortTargets,
     [Parameter(Mandatory)][object]$Settings
   )
 
@@ -28,25 +28,40 @@ function Invoke-HostDiagnostics {
     Invoke-PathpingRaw -Protocol $proto -HostName $h -ArgBuilder $round.PathpingArgs
   }
 
-  $tnc = Test-TcpPort -HostName $h -Port 443 -Hops 20 -Protocol $proto
+  $tnc = Test-TcpPort -HostName $h -Port 443 -Protocol $proto
 
   $portFindings = @(foreach ($t in $PortTargets) {
     if ($t.Protocol -eq 'TCP') {
-      $tcp = Test-TcpPort -HostName $h -Port $t.Port -Hops 10 -Protocol $proto
+      $tcp = Test-TcpPort -HostName $h -Port $t.Port -Protocol $proto
+      $tcpOpen = [bool]$tcp.TcpTestSucceeded
       [pscustomobject]@{
         Name = $t.Name
         Protocol = 'TCP'
         Port = $t.Port
-        Success = [bool]$tcp.TcpTestSucceeded
+        Success = $tcpOpen
+        PathReachable = $tcpOpen
+        ServiceOpen = $tcpOpen
+        ServiceStatus = if ($tcpOpen) { 'Open' } else { 'ClosedOrFiltered' }
         Note = 'Test-NetConnection'
       }
     } else {
       $udp = Test-UdpPortBestEffort -HostName $h -Port $t.Port -Protocol $proto -TimeoutMs 2000
+      $udpReachable = if ($udp.Status -in @('Likely reachable', 'Path OK, port closed')) { $true } else { $false }
+      $udpOpen = ($udp.Status -eq 'Likely reachable')
+      $udpServiceStatus = switch ($udp.Status) {
+        'Likely reachable' { 'OpenOrResponsive' }
+        'Path OK, port closed' { 'Closed' }
+        'Likely filtered' { 'FilteredOrNoResponse' }
+        default { 'Unknown' }
+      }
       [pscustomobject]@{
         Name = $t.Name
         Protocol = 'UDP'
         Port = $t.Port
-        Success = ($udp.Status -eq 'Likely reachable')
+        Success = $udpOpen
+        PathReachable = $udpReachable
+        ServiceOpen = $udpOpen
+        ServiceStatus = $udpServiceStatus
         Note = "$($udp.Status): $($udp.Detail)"
       }
     }
@@ -57,6 +72,7 @@ function Invoke-HostDiagnostics {
   $pathpingOk = if ($Settings.SkipPathping) { $null } else { ($ppResult.ExitCode -eq 0) }
   $tcp443Ok = [bool]$tnc.TcpTestSucceeded
   $hasPortFailures = @($portFindings | Where-Object { -not $_.Success }).Count -gt 0
+  $portsStatus = if ($portFindings.Count -eq 0) { 'Skipped' } elseif ($hasPortFailures) { 'Fail' } else { 'OK' }
 
   $failedStages = New-Object System.Collections.Generic.List[string]
   if (-not $pingOk) { $failedStages.Add('Ping') | Out-Null }
@@ -83,9 +99,9 @@ function Invoke-HostDiagnostics {
     PathpingStatus = if ($Settings.SkipPathping) { 'Skipped' } elseif ($pathpingOk) { 'OK' } else { 'Fail' }
     Tcp443OK = $tcp443Ok
     Tcp443Status = if ($tcp443Ok) { 'OK' } else { 'Fail' }
-    TraceRoute = $tnc.TraceRoute
+    TraceRoute = $trResult.Raw
     Ports = $portFindings
-    PortsStatus = if ($hasPortFailures) { 'Fail' } else { 'OK' }
+    PortsStatus = $portsStatus
     FailedStages = $failedStages.ToArray()
     OverallStatus = $overallStatus
   }

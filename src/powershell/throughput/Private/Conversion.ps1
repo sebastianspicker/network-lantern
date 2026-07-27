@@ -1,4 +1,4 @@
-# DSCP and bandwidth conversion helpers (private to Iperf3TestSuite)
+# DSCP and bandwidth conversion helpers (private to NetworkLantern.Throughput)
 
 function Get-TosFromDscpClass {
   [CmdletBinding()]

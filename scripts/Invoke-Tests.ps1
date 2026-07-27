@@ -9,27 +9,48 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Get-RepoRoot
 $testsDir = Join-Path $repoRoot 'tests'
 
-if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
-  Write-Error "Pester 5+ is required. Install with: Install-Module Pester -MinimumVersion 5.7.1 -Scope CurrentUser -Force"
+if (-not $Filter) {
+  & (Join-Path $repoRoot 'scripts/ci.ps1')
+  exit $LASTEXITCODE
+}
+
+Write-Warning 'Invoke-Tests.ps1 -Filter runs a filtered Pester subset only. Use scripts/ci.ps1 or ./scripts/ci-local.sh for the full verification gate.'
+
+$requiredPesterVersion = [version]'5.7.1'
+if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -eq $requiredPesterVersion })) {
+  Write-Error "Pester $requiredPesterVersion is required. Install with: Install-Module Pester -RequiredVersion $requiredPesterVersion -Scope CurrentUser -Force"
   exit 1
 }
+Get-Module -Name Pester | Remove-Module -Force -ErrorAction SilentlyContinue
+Import-Module Pester -RequiredVersion $requiredPesterVersion -Force -ErrorAction Stop
+
+$testResultsDir = Join-Path $repoRoot 'artifacts'
+New-Item -ItemType Directory -Path $testResultsDir -Force | Out-Null
 
 $config = [PesterConfiguration]::Default
 $config.Run.Path = $testsDir
-$config.Run.Exit = $true
+$config.Run.Exit = $false
 $config.Run.PassThru = $true
 $config.Output.Verbosity = 'Detailed'
 $config.TestResult.Enabled = $true
 $config.TestResult.OutputFormat = 'NUnitXml'
-$config.TestResult.OutputPath = Join-Path $repoRoot 'artifacts/testResults.xml'
+$config.TestResult.OutputPath = Join-Path $testResultsDir 'testResults.xml'
 $config.Should.ErrorAction = 'Stop'
 
-if ($Filter) {
-  $config.Filter.FullName = "*$Filter*"
-}
+$config.Filter.FullName = "*$Filter*"
 
 $result = Invoke-Pester -Configuration $config
 
-if ($result.FailedCount -gt 0) {
+if (-not $result) {
+  Write-Error 'Pester did not return a result object.'
   exit 1
 }
+if (($result.TotalCount - $result.NotRunCount) -eq 0) {
+  Write-Error "No tests matched filter '$Filter'."
+  exit 1
+}
+if ($result.Result -ne 'Passed') {
+  exit 1
+}
+
+exit 0

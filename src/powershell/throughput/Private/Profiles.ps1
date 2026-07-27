@@ -1,4 +1,4 @@
-# Profile storage helpers (private to Iperf3TestSuite)
+# Profile storage helpers (private to NetworkLantern.Throughput)
 
 function Get-DefaultProfilesFilePath {
   [CmdletBinding()]
@@ -102,64 +102,14 @@ function Read-Iperf3ProfilesStore {
   return $store
 }
 
-function Write-Iperf3ProfilesStore {
-  [CmdletBinding()]
-  [OutputType([void])]
-  param(
-    [Parameter(Mandatory)]
-    [string]$ProfilesFile,
-    [Parameter(Mandatory)]
-    [hashtable]$Store
-  )
-  if (-not $ProfilesFile.EndsWith('.json', [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Profiles file must have a .json extension: $ProfilesFile"
-  }
-  $dir = Split-Path -Parent $ProfilesFile
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-    $null = New-Item -ItemType Directory -Path $dir -Force
-  }
-  $Store['updatedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
-  $json = $Store | ConvertTo-Json -Depth 10
-  # Write to a temp file first, then atomically rename to prevent partial corruption on crash.
-  $tempPath = "$ProfilesFile.tmp"
-  # Use exclusive file lock to prevent concurrent writes (GUI + CLI) from corrupting the store.
-  $maxAttempts = 3
-  $delayMs = 500
-  for ($i = 0; $i -lt $maxAttempts; $i++) {
-    try {
-      $stream = [System.IO.File]::Open($tempPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-      try {
-        $writer = New-Object System.IO.StreamWriter($stream, [System.Text.Encoding]::UTF8)
-        $writer.Write($json)
-        $writer.Flush()
-      }
-      finally {
-        if ($writer) { $writer.Dispose() }
-        $stream.Dispose()
-      }
-      [System.IO.File]::Move($tempPath, $ProfilesFile, $true)
-      return
-    }
-    catch [System.IO.IOException] {
-      if ($i -lt ($maxAttempts - 1)) {
-        Write-Verbose "Profiles file locked, retrying in ${delayMs}ms (attempt $($i + 1)/$maxAttempts)..."
-        Start-Sleep -Milliseconds $delayMs
-      }
-      else {
-        throw "Failed to write profiles file after $maxAttempts attempts (file locked): $ProfilesFile"
-      }
-    }
-  }
-}
-
 function Invoke-LockedProfileOperation {
   <#
   .SYNOPSIS
   Executes a read-modify-write operation on the profiles file under an exclusive file lock.
   .DESCRIPTION
-  Opens the profiles file with an exclusive lock, reads its content, passes it to the
-  provided scriptblock for modification, writes the result, then releases the lock.
-  This prevents TOCTOU races when multiple processes (GUI + CLI) access the same file.
+  Holds a stable sidecar lock while using the guarded store reader, passes the store to
+  the provided scriptblock, then atomically replaces the profiles file from a same-directory
+  temporary file. This prevents lost updates and partial reads across GUI and CLI processes.
   .PARAMETER ProfilesFile
   Path to the profiles JSON file.
   .PARAMETER Operation
@@ -183,75 +133,52 @@ function Invoke-LockedProfileOperation {
   if ($dir -and -not (Test-Path -LiteralPath $dir)) {
     $null = New-Item -ItemType Directory -Path $dir -Force
   }
-  $maxAttempts = 3
-  $delayMs = 500
+  $lockPath = "$ProfilesFile.lock"
+  $maxAttempts = 30
+  $delayMs = 100
   for ($i = 0; $i -lt $maxAttempts; $i++) {
+    $lockStream = $null
+    $tempPath = $null
     try {
-      $stream = [System.IO.File]::Open(
-        $ProfilesFile,
-        [System.IO.FileMode]::OpenOrCreate,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::None
-      )
+      # Lock a stable sidecar rather than the replace target itself. Readers see
+      # either the old complete file or the new complete file after the rename.
       try {
-        # Read current content under lock
-        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true, 4096, $true)
-        $raw = $reader.ReadToEnd()
-        $reader.Dispose()
-
-        # Parse the store
-        $store = $null
-        if ([string]::IsNullOrWhiteSpace($raw)) {
-          $store = @{
-            version    = 1
-            updatedUtc = (Get-Date).ToUniversalTime().ToString('o')
-            profiles   = @{}
-          }
-        }
-        else {
-          try {
-            $obj = ConvertFrom-Json -InputObject $raw -AsHashtable -ErrorAction Stop
-            $store = ConvertTo-Iperf3HashtableFromObject -InputObject $obj
-            if (-not $store.ContainsKey('profiles')) { $store['profiles'] = @{} }
-            $store['profiles'] = ConvertTo-Iperf3HashtableFromObject -InputObject $store['profiles']
-            if (-not $store.ContainsKey('version')) { $store['version'] = 1 }
-            if (-not $store.ContainsKey('updatedUtc')) { $store['updatedUtc'] = (Get-Date).ToUniversalTime().ToString('o') }
-          }
-          catch {
-            if ($StrictConfiguration) { throw "Profiles file is invalid JSON: $ProfilesFile" }
-            $store = @{
-              version    = 1
-              updatedUtc = (Get-Date).ToUniversalTime().ToString('o')
-              profiles   = @{}
-            }
-          }
-        }
-
-        # Execute the caller's modification
-        $store = & $Operation $store
-
-        # Write back under the same lock
-        $store['updatedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
-        $json = $store | ConvertTo-Json -Depth 10
-        $stream.SetLength(0)
-        $stream.Position = 0
-        $writer = New-Object System.IO.StreamWriter($stream, [System.Text.Encoding]::UTF8)
-        $writer.Write($json)
-        $writer.Flush()
-        $writer.Dispose()
+        $lockStream = [System.IO.File]::Open(
+          $lockPath,
+          [System.IO.FileMode]::OpenOrCreate,
+          [System.IO.FileAccess]::ReadWrite,
+          [System.IO.FileShare]::None
+        )
       }
-      finally {
-        $stream.Dispose()
-      }
-      return $store
-    }
-    catch [System.IO.IOException] {
-      if ($i -lt ($maxAttempts - 1)) {
+      catch [System.IO.IOException] {
+        if ($i -ge ($maxAttempts - 1)) {
+          throw "Failed to access profiles file after $maxAttempts attempts (file locked): $ProfilesFile"
+        }
         Write-Verbose "Profiles file locked, retrying in ${delayMs}ms (attempt $($i + 1)/$maxAttempts)..."
         Start-Sleep -Milliseconds $delayMs
+        continue
       }
-      else {
-        throw "Failed to access profiles file after $maxAttempts attempts (file locked): $ProfilesFile"
+      # Reuse the read path so mutation honors the 1 MiB limit and corrupt-store
+      # backup behavior before applying any change.
+      $store = Read-Iperf3ProfilesStore -ProfilesFile $ProfilesFile -StrictConfiguration:$StrictConfiguration
+      $store = & $Operation $store
+      $store['updatedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
+      $json = $store | ConvertTo-Json -Depth 10
+      $serializedBytes = [System.Text.Encoding]::UTF8.GetByteCount([string]$json)
+      if ($serializedBytes -gt 1MB) {
+        throw "Profiles file would exceed maximum size (1 MB): $ProfilesFile"
+      }
+      $tempName = ".{0}.{1}.tmp" -f ([System.IO.Path]::GetFileName($ProfilesFile)), ([guid]::NewGuid().ToString('N'))
+      $tempPath = Join-Path -Path (Split-Path -Parent $ProfilesFile) -ChildPath $tempName
+      Set-Content -LiteralPath $tempPath -Value $json -Encoding UTF8 -NoNewline
+      [System.IO.File]::Move($tempPath, $ProfilesFile, $true)
+      $tempPath = $null
+      return $store
+    }
+    finally {
+      if ($lockStream) { $lockStream.Dispose() }
+      if ($tempPath -and (Test-Path -LiteralPath $tempPath)) {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
       }
     }
   }

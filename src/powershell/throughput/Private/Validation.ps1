@@ -1,4 +1,4 @@
-# Validation helpers: hostname/IP and ping args (private to Iperf3TestSuite)
+# Validation helpers: hostname/IP and ping args (private to NetworkLantern.Throughput)
 
 function Test-ValidHostnameOrIP {
   <#

@@ -1,4 +1,4 @@
-# Reachability, TCP port, MTU probe, and test-suite connectivity (private to Iperf3TestSuite)
+# Reachability, TCP port, MTU probe, and test-suite connectivity (private to NetworkLantern.Throughput)
 
 function Test-Reachability {
   [CmdletBinding()]
@@ -38,6 +38,130 @@ function Test-Reachability {
   return 'None'
 }
 
+function Test-Iperf3TcpConnection {
+  [CmdletBinding()]
+  [OutputType([pscustomobject])]
+  param(
+    [Parameter(Mandatory)]
+    [string]$ComputerName,
+    [Parameter(Mandatory)]
+    [ValidateRange(1, 65535)]
+    [int]$Port,
+    [ValidateRange(1, 300000)]
+    [int]$TimeoutMs = 10000,
+    [scriptblock]$ConnectAsync
+  )
+  $client = New-Object System.Net.Sockets.TcpClient
+  try {
+    $task = if ($ConnectAsync) {
+      & $ConnectAsync $client $ComputerName $Port
+    }
+    else {
+      $client.ConnectAsync($ComputerName, $Port)
+    }
+    $connected = [bool]$task.Wait($TimeoutMs)
+    if ($task.IsFaulted) { $null = $task.Exception }
+    $remoteAddress = $ComputerName
+    $remoteAddressFamily = $null
+    if ($connected -and $client.Connected -and $client.Client.RemoteEndPoint -is [System.Net.IPEndPoint]) {
+      $remoteAddress = [string]$client.Client.RemoteEndPoint.Address
+      $remoteAddressFamily = [string]$client.Client.RemoteEndPoint.AddressFamily
+    }
+    return [pscustomobject]@{
+      TcpTestSucceeded  = ($connected -and $client.Connected)
+      RemoteAddress     = $remoteAddress
+      RemoteAddressFamily = $remoteAddressFamily
+      PingSucceeded     = $null
+    }
+  }
+  catch {
+    Write-Warning "TCP port $Port check on '$ComputerName' failed: $($_.Exception.Message)"
+    return [pscustomobject]@{
+      TcpTestSucceeded = $false
+      RemoteAddress = $ComputerName
+      RemoteAddressFamily = $null
+      PingSucceeded = $null
+    }
+  }
+  finally {
+    if ($client) { $client.Dispose() }
+  }
+}
+
+function Invoke-Iperf3TraceRoute {
+  [CmdletBinding()]
+  [OutputType([pscustomobject])]
+  param(
+    [Parameter(Mandatory)]
+    [string]$ComputerName,
+    [ValidateRange(1, 30)]
+    [int]$Hops = $script:DefaultTraceHops,
+    [ValidateRange(1, 300000)]
+    [int]$TimeoutMs = 10000,
+    [scriptblock]$TraceScript
+  )
+  try {
+    $payload = [ordered]@{
+      ComputerName = $ComputerName
+      Hops         = $Hops
+      TraceScript  = if ($TraceScript) { $TraceScript.ToString() } else { $null }
+    }
+    $payloadJson = $payload | ConvertTo-Json -Compress
+    $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson))
+    $workerScript = @"
+`$ErrorActionPreference = 'Stop'
+`$payloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$payloadBase64'))
+`$payload = `$payloadJson | ConvertFrom-Json
+if (`$payload.TraceScript) {
+  `$traceBlock = [scriptblock]::Create([string]`$payload.TraceScript)
+  `$traceResult = & `$traceBlock ([string]`$payload.ComputerName) ([int]`$payload.Hops)
+}
+else {
+  `$rawTrace = Test-NetConnection -ComputerName ([string]`$payload.ComputerName) -TraceRoute -Hops ([int]`$payload.Hops) -InformationLevel Detailed -ErrorAction Stop
+  `$traceResult = [pscustomobject]@{
+    ComputerName  = [string]`$rawTrace.ComputerName
+    RemoteAddress = [string]`$rawTrace.RemoteAddress
+    TraceRoute    = @(`$rawTrace.TraceRoute | ForEach-Object { [string]`$_ })
+  }
+}
+`$traceResult | ConvertTo-Json -Depth 8 -Compress
+"@
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
+    $pwshPath = (Get-Process -Id $PID).Path
+    # The hard wall bound is execution timeout plus the finite tree-termination
+    # and redirected-stream drain budgets below. The child process is a killable
+    # root boundary; detached/reparented descendants remain explicitly unverified.
+    $native = Invoke-Iperf3NativeProcess -FilePath $pwshPath `
+      -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand) `
+      -TimeoutMs $TimeoutMs -TerminationGracePeriodMs 500 -StreamDrainTimeoutMs 250
+    if ($native.Cancelled) {
+      throw (New-Iperf3CancellationException -NativeProcess $native -RunId $native.CancellationRunId)
+    }
+    if ($native.TimedOut) {
+      $cleanupDetail = if ($native.TerminationSucceeded -and $native.StreamsCompleted) {
+        'tracked child cleanup verified'
+      }
+      else {
+        "child cleanup unverified: $($native.TerminationError) $($native.StreamReadError)"
+      }
+      Write-Verbose "Traceroute exceeded its ${TimeoutMs}ms execution deadline ($cleanupDetail); TCP result remains valid."
+      return $null
+    }
+    if ($native.ExitCode -ne 0 -or -not $native.StreamsCompleted) {
+      Write-Verbose "Traceroute worker failed; TCP result remains valid: exit=$($native.ExitCode) $($native.StdErr) $($native.StreamReadError)"
+      return $null
+    }
+    $traceJson = Get-JsonSubstringOrNull -Text $native.StdOut
+    if (-not $traceJson) { throw 'Traceroute worker did not return JSON.' }
+    return ($traceJson | ConvertFrom-Json -ErrorAction Stop)
+  }
+  catch {
+    if ($_.Exception.Data -and $_.Exception.Data['NetworkLantern.CleanupRecordVersion'] -eq 1) { throw }
+    Write-Verbose "Traceroute failed (e.g. ICMP filtered); TCP result still valid: $($_.Exception.Message)"
+    return $null
+  }
+}
+
 function Test-TcpPortAndTrace {
   [CmdletBinding()]
   [OutputType([pscustomobject])]
@@ -50,41 +174,41 @@ function Test-TcpPortAndTrace {
     [ValidateRange(1, 30)]
     [int]$Hops = $script:DefaultTraceHops,
     [ValidateRange(1000, 300000)]
-    [int]$TimeoutMs = 10000
+    [int]$TimeoutMs = 10000,
+    [ValidateRange(1, 300000)]
+    [int]$TraceTimeoutMs = 10000
   )
-  $tcp = $null
+  $tcp = Test-Iperf3TcpConnection -ComputerName $ComputerName -Port $Port -TimeoutMs $TimeoutMs
   $trace = $null
-  if ($IsWindows) {
-    try { $tcp = Test-NetConnection -ComputerName $ComputerName -Port $Port -InformationLevel Detailed -ErrorAction Stop }
-    catch { Write-Warning "TCP port $Port check on '$ComputerName' failed: $($_.Exception.Message)" }
-    if ($tcp -and $tcp.TcpTestSucceeded) {
-      try { $trace = Test-NetConnection -ComputerName $ComputerName -TraceRoute -Hops $Hops -InformationLevel Detailed -ErrorAction Stop }
-      catch { Write-Verbose "Traceroute failed (e.g. ICMP filtered); TCP result still valid." }
-    }
+  if ($IsWindows -and $tcp.TcpTestSucceeded) {
+    $trace = Invoke-Iperf3TraceRoute -ComputerName $ComputerName -Hops $Hops -TimeoutMs $TraceTimeoutMs
   }
-  else {
-    # Cross-platform fallback: use TcpClient for port check; traceroute unavailable.
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-      $task = $client.ConnectAsync($ComputerName, $Port)
-      $connected = $task.Wait($TimeoutMs)
-      if ($task.IsFaulted) { $null = $task.Exception }
-      $tcp = [pscustomobject]@{
-        TcpTestSucceeded = ($connected -and $client.Connected)
-        RemoteAddress    = $ComputerName
-        PingSucceeded    = $null
-      }
-    }
-    catch {
-      Write-Warning "TCP port $Port check on '$ComputerName' failed: $($_.Exception.Message)"
-      $tcp = [pscustomobject]@{ TcpTestSucceeded = $false; RemoteAddress = $ComputerName; PingSucceeded = $null }
-    }
-    finally {
-      if ($client) { $client.Dispose() }
-    }
+  elseif (-not $IsWindows) {
     Write-Verbose "Traceroute not available on non-Windows platforms."
   }
   [pscustomobject]@{ Tcp = $tcp; Trace = $trace }
+}
+
+function Get-Iperf3StackFromTcpResult {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param(
+    [Parameter(Mandatory)]
+    [object]$Tcp
+  )
+
+  if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddressFamily') {
+    switch ([string]$Tcp.RemoteAddressFamily) {
+      'InterNetworkV6' { return 'IPv6' }
+      'InterNetwork' { return 'IPv4' }
+    }
+  }
+
+  $remoteAddress = if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddress') { [string]$Tcp.RemoteAddress } else { '' }
+  if ($remoteAddress -match ':') {
+    return 'IPv6'
+  }
+  return 'IPv4'
 }
 
 function Test-MtuPayload {
@@ -114,7 +238,7 @@ function Test-MtuPayload {
   return $fails.ToArray()
 }
 
-function Test-Iperf3TestSuitePrerequisites {
+function Test-NetworkThroughputPrerequisites {
   [CmdletBinding()]
   [OutputType([void])]
   param(
@@ -165,7 +289,7 @@ function Get-TestSuiteConnectivity {
     throw "TCP port $Port on '$Target' not reachable. Verify the iperf3 server is running (iperf3 -s -p $Port) and the port is not blocked by a firewall."
   }
   if ($stack -eq 'None') {
-    $stack = if ($net.Tcp.RemoteAddress -match ':') { 'IPv6' } else { 'IPv4' }
+    $stack = Get-Iperf3StackFromTcpResult -Tcp $net.Tcp
     Write-Verbose "Using stack $stack from TCP connection."
   }
   $mtuFails = @()

@@ -147,3 +147,9 @@ load test_helper
   run bash "$PATH_APP" --log-dir ".." --dry-run
   assert_failure
 }
+
+@test "non-positive MTR timeout is rejected" {
+  run env MTR_TIMEOUT_SECONDS=0 bash "$PATH_APP" --dry-run --no-summary
+  assert_failure
+  assert_output --partial "MTR_TIMEOUT_SECONDS must be a positive integer"
+}
