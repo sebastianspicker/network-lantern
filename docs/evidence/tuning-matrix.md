@@ -1,12 +1,59 @@
-# Windows Tuning Evidence Matrix
+# Windows tuning scope
 
-| Setting | Status | Included | Reason |
-| --- | --- | --- | --- |
-| DSCP/QoS policy helpers | supported | yes | operator-controlled and easy to verify |
-| Local QoS marking registry enablement | supported | yes | required for local QoS policy behavior |
-| NIC power-saving disables (`EEE`, `GreenEthernet`, `PowerSavingMode`) | conservative | yes in `Measured` | low-risk endpoint-side consistency check |
-| High performance power plan | situational | yes in `Measured` | optional and reversible, useful for comparison runs |
-| Interrupt moderation disable | excluded | no | successor analysis did not support broad default use |
-| `NetworkThrottlingIndex` tweak | excluded | no | not evidence-backed for this suite |
-| UDP receive offload disable | excluded | no | too situational for default diagnostics use |
-| folklore registry bundles | excluded | no | not defensible without suite-local evidence |
+The public Windows tuning profiles include a limited set of settings. Inclusion
+means the setting is implemented and covered by automated unit or dry-run tests.
+It does not establish that the setting improves a specific workload.
+
+| Setting | Profile | Apply behavior |
+| --- | --- | --- |
+| Local QoS marking registry value | `Safe`, `Measured` | Sets `Do not use NLA` under the Windows TCP/IP QoS key |
+| UDP port DSCP policies | `Safe`, `Measured` | Creates one managed `NetQosPolicy` per requested UDP port |
+| Application DSCP policies | `Safe`, `Measured` | Creates managed policies only when `-IncludeAppPolicies` and `-AppPaths` are supplied |
+| Energy Efficient Ethernet | `Measured` | Attempts to disable standardized NIC keyword `*EEE` |
+| Green Ethernet | `Measured` | Attempts to disable standardized NIC keyword `*GreenEthernet` |
+| Power Saving Mode | `Measured` | Attempts to disable standardized NIC keyword `*PowerSavingMode` |
+| High Performance power plan | `Measured` | Selected by default for the profile |
+
+The public Apply path does not change these settings:
+
+- interrupt moderation
+- flow control
+- UDP, TCP, or large-send offload
+- `NetworkThrottlingIndex`
+- AFD thresholds
+- MMCSS audio task values
+- Game DVR state
+- arbitrary registry tuning bundles
+
+Private helpers and reset compatibility code may contain handling for settings
+outside the public Apply profiles. Their presence does not make them part of a
+current profile.
+
+## Mutation controls
+
+- Apply must produce and validate a complete backup before mutation.
+- The backup manifest records schema and component metadata plus artifact
+  digests.
+- Restore validates manifest structure, compatibility, component state,
+  artifacts, digests, registry content, and backup path trust.
+- Restore consumes a protected staged copy and revalidates it before each
+  component.
+- Managed QoS cleanup is limited to known Network Lantern and compatibility
+  prefixes.
+- Reset compatibility code removes only named MMCSS audio values instead of
+  deleting the shared key.
+- `-DryRun` performs no backup or Windows configuration write.
+
+## Verification status
+
+| Evidence | Status |
+| --- | --- |
+| `Safe` and `Measured` direct dry runs | Verified on Windows without elevation |
+| Umbrella Windows tuning dry run | Verified on Windows without elevation |
+| Backup refusal before mutation | Covered by Pester |
+| Manifest shape, schema, digest, path, registry-content, and staging checks | Covered by Pester |
+| Managed QoS and reset ownership boundaries | Covered by Pester |
+| Native elevated apply, injected failure, and restore | Not verified for this revision |
+
+Do not treat real Windows mutation as a supported recovery workflow until the
+last item is exercised on a disposable VM with an independent recovery method.

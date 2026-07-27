@@ -92,10 +92,7 @@ print_list() {
 #   Prints the escaped string to stdout
 json_escape() {
   local s=$1
-  s=${s//\\/\\\\}
-  s=${s//\"/\\\"}
-  s=${s//$'\n'/\\n}
-  s=${s//$'\r'/\\r}
-  s=${s//$'\t'/\\t}
-  printf '%s' "$s"
+  local encoded
+  encoded=$(jq -Rrn --arg value "$s" '$value | @json') || return 1
+  printf '%s' "${encoded:1:${#encoded}-2}"
 }

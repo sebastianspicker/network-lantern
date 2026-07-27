@@ -1,55 +1,107 @@
 # Pester (Invoke-Pester -CI)
-testResults.xml
-TestResults.xml
-PesterResults*.xml
-junit.xml
-test-results/
-TestResults/
-coverage/
-artifacts/
-profiles/*.local.json
+/testResults.xml
+/PesterResults*.xml
+/junit.xml
+/test-results/
+/TestResults/
+/coverage/
+/artifacts/
+
+# Local runtime data and operator output
+/.iperf3/
+/profiles/*.local.json
+/logs/
+/reports/
+/results/
+/backups/
+*.reg
+*.clixml
+*.pcap
+*.pcapng
 
 # Secrets and credentials
 .env
 .env.*
+!.env.example
+!.env.*.example
 *.pem
 *.key
 *.pfx
 *.p12
 *.crt
 *.cer
-*credentials*.json
-*secret*
-!scripts/Invoke-SecretScan.ps1
-!SECURITY.md
+/credentials.local.json
+/secrets.local.json
+/*.credentials.local.json
+/*.secrets.local.json
+/.credentials/
+/.secrets/
 
 # Logs and temp files
 *.log
 *.tmp
 *.bak
 *.swp
-.cache/
+*.orig
+*.rej
+*~
+/.cache/
 
-# Local findings/logs/decisions
-DECISIONS.md
-FINDINGS.md
-LOG.md
-REFACTOR_PLAN.md
-PHYSICS_AUDIT.md
-validation.md
-HANDOFF.md
+# Local findings, work notes, and private archives
+/DECISIONS.md
+/FINDINGS.md
+/LOG.md
+/REFACTOR_PLAN.md
+/PHYSICS_AUDIT.md
+/validation.md
+/HANDOFF.md
+/RELEASE_STATUS.md
+/TASK_REPORT.md
+/CLEANUP_REPORT.md
+/EVALUATION.md
+/SUMMARY.md
+/SCRATCH.md
+/.internal/
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/PROMPT.md
+/PROMPTS.md
+/.github/copilot-instructions.md
+/.github/instructions/
 
 # Task-tracking artifacts
-DONE
+/DONE
 
-# AI tooling
-.claude/
-progress.md
+# Local development tooling and indexes
+/.claude/
+/.codegraph/
+/.kilo/
+/.serena/
+/.agents/
+/.continue/
+/.prompt/
+/.prompts/
+/.aider.conf.yml
+/.aider.chat.history.md
+/.aider.input.history
+/.aider.tags.cache.v*/
+/.cursorrules
+/.windsurfrules
+/.codacy/.gitignore
+/.codacy/cli-config.yaml
+/.codacy/codacy.config.json
+/.codacy/codacy.yaml
+/.codacy/generated/
+/.codacy/logs/
+/.codacy/tools-configs/
+/progress.md
 
 # OS / Editor
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
-.cursor/
-.codex/
+Desktop.ini
+/.idea/
+/.vscode/
+/.cursor/
+/.codex/

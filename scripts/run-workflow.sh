@@ -8,4 +8,4 @@ if ! command -v pwsh >/dev/null 2>&1; then
   exit 1
 fi
 
-exec pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/Invoke-NetworkDiagnostics.ps1" "$@"
+exec pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/Invoke-NetworkLantern.ps1" "$@"

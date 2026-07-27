@@ -1,36 +1,37 @@
 name: Feature request
-description: Suggest an enhancement or new preset option
+description: Suggest an enhancement or new Network Lantern capability
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion. Please avoid sharing sensitive data.
+        Do not include credentials, private hostnames, internal IP addresses,
+        raw route traces, or unsanitized logs.
   - type: textarea
     id: problem
     attributes:
       label: Problem statement
-      description: What problem are you trying to solve?
+      description: Describe the operator problem or current limitation.
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
-      description: What would you like to see added or changed?
+      description: Describe the proposed behavior and affected workflow.
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Any alternatives or workarounds you've tried?
+      description: List workarounds or alternative designs considered.
     validations:
       required: false
   - type: textarea
     id: context
     attributes:
       label: Context
-      description: Any additional context, measurements, or constraints (no secrets).
+      description: Add sanitized measurements or constraints that affect the proposal.
     validations:
       required: false

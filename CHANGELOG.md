@@ -1,41 +1,115 @@
 # Changelog
 
-## v1.0.0 — 2026-04-18
+## Unreleased
+
+### Alpha release preparation
+
+- Define `0.1.0-alpha.1` as the first unified repository release candidate.
+- Document the alpha compatibility boundary, platform limits, runtime
+  requirements, configuration precedence, local state, and troubleshooting.
+- Distinguish normal throughput run previews from explicit profile save and
+  delete operations, which modify the selected profile store.
+- Align contribution, security, verification, issue, and pull request guidance
+  with the current validation commands.
+
+### Public interface rename
+
+- Rename the project to Network Lantern and use `network-lantern` as the
+  intended repository slug.
+- Rename active operator commands to `Invoke-NetworkLantern.ps1`,
+  `Test-NetworkPath.ps1`, `test-network-path.sh`,
+  `Measure-NetworkThroughput.ps1`, `Measure-NetworkThroughput-GUI.ps1`, and
+  `Invoke-NetworkPathTuning.ps1`.
+- Retain `Invoke-NetworkPathTuning-GUI.ps1` as an informational compatibility
+  entrypoint that directs users to the tuning CLI.
+- Rename the throughput and Windows tuning modules to
+  `NetworkLantern.Throughput` and `NetworkLantern.WindowsTuning`.
+- Rename exported tuning helpers to `Get-NetworkLanternDefaultBackupFolder`
+  and `Test-NetworkTuningAdministrator`.
+
+### Windows safety and recovery
+
+- Make tuning `-DryRun` non-mutating and non-elevated for Apply, Backup, and
+  Restore previews. Real Apply, Backup, and Restore remain elevation-gated.
+- Remove the public administrator-check bypass from the tuning command and
+  exported function.
+- Require a complete, verified backup before Apply reaches any tuning mutation.
+- Advance backup manifests to schema 3 with artifact digests, backup path trust
+  checks, protected restore staging, and revalidation before restore consumers.
+- Isolate Windows restore fixtures with trusted disposable access controls.
+- Replace host `netsh` execution in the reset-scope test with a test double that
+  verifies the intended calls.
+
+### Verification and portability
+
+- Load exactly PSScriptAnalyzer 1.24.0 and Pester 5.7.1 in local and CI gates.
+- Fail full and filtered Pester gates when no tests are selected or executed.
+- Replace the Bash test suite's Python JSON dependency with `jq`.
+- Normalize text files to LF through `.gitattributes`.
+- Add a read-only prerequisite report and document the cross-shell and
+  PowerShell-only verification paths.
+
+### Repository hygiene
+
+- Keep mutable throughput profiles in ignored local state instead of a tracked
+  JSON store.
+- Keep machine-local state, operational output, packet captures, and tuning
+  exports outside version control.
+- Make the local secret scan inspect tracked and non-ignored untracked files.
+- Align maintained documentation with `main` as the integration branch and the
+  current source layout.
+
+### Implementation structure
+
+- Split throughput native-process, invocation, metric, and test-execution
+  helpers into responsibility-specific private files with explicit load order.
+- Split Windows backup, manifest validation, restore staging, component
+  restore, and action orchestration into responsibility-specific private files.
+- Split the throughput Pester suite into topical test files while preserving
+  test names and discovery counts.
+
+## Pre-alpha development snapshot (2026-04-18)
+
+This snapshot was previously labeled `v1.0.0`, but no corresponding local or
+remote Git tag exists. The entries are retained as development history and do
+not describe a published stable release.
 
 ### Added
 
-- Orchestration (`Invoke-NetworkDiagnostics.ps1`): JSON-serialised isolated child-process launch; resolves array argument misbinding when calling downstream scripts.
-- Orchestration: direct regression tests covering Triage, Path, and Baseline workflows.
-- Path: per-stage status fields (`PingStatus`, `TracertStatus`, `PathpingStatus`, `Tcp443Status`, `PortsStatus`) and a derived `OverallStatus` (`OK`/`Fail`) on every result row.
-- Path: `FailedStages` list on each result; process exit code now reflects any stage failure, not only TCP/443.
-- Path: `PathpingStatus = Skipped` when `-SkipPathping` is used — distinct from `OK`.
-- Path: `Get-RoundDefinitions` accepts explicit execution parameters instead of reading ambient caller scope.
-- Path: `Invoke-HostDiagnostics` and `Invoke-DiagnosticsMatrix` accept an explicit `Settings` object, eliminating ambient-variable coupling.
-- Bash path: `DEFAULT_TEST_TYPES=(ICMP4 ICMP6 TCP4 TCP6)` and `DEFAULT_ROUNDS=(Standard)` replace the previous full-matrix default.
-- Bash path: empty `--types`, `--rounds`, `--hosts4`, `--hosts6` values are now rejected as input errors.
-- Throughput: structured `try/catch` around CLI bootstrap so import failures exit with code 12 (Prerequisite).
-- Throughput: CLI precedence refactored — `$forwardParams` carries only user-provided or config values; module defaults are applied inside the module.
-- Throughput: IPv6 validation replaced the permissive regex with `[System.Net.IPAddress]::TryParse`; scope-id addresses (`%`) are rejected.
-- Windows tuning: `Get-UjManagedQosPolicy` `ErrorOnFailure` switch; `Verify` now returns `Success = False` and `Unknown` component status when QoS enumeration is unavailable.
-- Windows tuning: `Read-UjBackupManifest` validates schema version and tool name before any restore work; incompatible manifests yield `Warn`/`Skipped` without destructive side-effects.
-- Windows tuning: `Get-UjBackupManifestMetadata` enriches backup manifests with machine name, OS version, platform, module version, and schema version.
-- Windows tuning: `UjBackupSchemaVersion = 2` and `UjOwnedMmcssAudioValueNames` constant for scope-bounded reset.
-- Windows tuning: `Reset-UjBaseline` removes only owned MMCSS Audio values instead of deleting entire task keys.
-- Windows tuning: new tests for verify false-success, incompatible manifest rejection, and reset scope.
-- Docs: workflow docs and architecture updated to reflect corrected behaviour and public surface.
+- Added isolated child-process orchestration with serialized array arguments.
+- Added direct regression tests for Triage, Path, and Baseline workflows.
+- Added per-stage path status fields and a derived overall status for each
+  result row.
+- Added failed-stage reporting and made path process status reflect any planned
+  stage failure.
+- Distinguished skipped pathping work from successful pathping work.
+- Removed ambient caller-scope dependencies from path round and diagnostic
+  helpers.
+- Changed the Bash default to the bounded
+  `ICMP4,ICMP6,TCP4,TCP6` by `Standard` matrix.
+- Rejected empty Bash type, round, and host selections.
+- Added structured throughput CLI exit handling for initialization failures.
+- Moved throughput defaults into the module and kept CLI forwarding limited to
+  explicitly supplied or configured values.
+- Replaced permissive IPv6 validation with `IPAddress.TryParse` and rejected
+  scope identifiers.
+- Made Windows tuning verification report unavailable QoS enumeration as an
+  unknown component and a failed verification.
+- Added Windows backup schema validation, metadata, and scope-bounded reset
+  behavior.
 
 ### Changed
 
-- Windows tuning module: `Invoke-UdpJitterOptimization` and `Get-UjDefaultBackupFolder` removed from `FunctionsToExport`.
-- `apps/windows-tuning/Optimize-NetworkPath-GUI.ps1`: changed from `Write-Error` to an informational `Write-Output` redirect.
-- `Compare-Iperf3Runs` documentation narrowed to status/counts/timing comparison.
-- `NetPathSuite.ps1` error message updated: `NetTestSuite` → `NetPathSuite`.
-- `Qos.ps1` `New-UjDscpPolicyByApp`: fixed broken warning format string.
+- Removed legacy Windows tuning helpers from the exported module surface.
+- Changed the legacy tuning GUI entrypoint from an error to an informational
+  CLI redirect.
+- Narrowed `Compare-Iperf3Runs` documentation to the fields it compares.
+- Corrected path and QoS error messages.
 
-### Initial repo work (carried forward from dev)
+### Source consolidation
 
-- repurposed the archived Windows UDP jitter repo into `network-diagnostics-suite`
-- imported path diagnostics from `mtr-test-suite`
-- imported throughput diagnostics from `iperf3-test-suite`
-- replaced the public Windows tuning surface with a conservative CLI-first workflow
-- added umbrella orchestration, workflow docs, migration notes, and unified CI on `dev`
+- Consolidated code from the prior Network Diagnostics Suite, MTR path,
+  `iperf3` throughput, and Windows UDP jitter workspaces.
+- Replaced the earlier Windows tuning surface with an optional CLI workflow.
+- Added umbrella orchestration, workflow documentation, migration notes, and a
+  unified CI configuration.

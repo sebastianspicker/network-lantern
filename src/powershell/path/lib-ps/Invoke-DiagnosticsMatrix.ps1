@@ -11,7 +11,7 @@ function Invoke-DiagnosticsMatrix {
   #>
   param(
     [Parameter(Mandatory)][System.Collections.Generic.List[object]]$Plan,
-    [Parameter(Mandatory)][array]$PortTargets,
+    [Parameter(Mandatory)][AllowEmptyCollection()][array]$PortTargets,
     [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Results,
     [Parameter(Mandatory)][object]$Settings
   )

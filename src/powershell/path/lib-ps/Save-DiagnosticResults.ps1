@@ -1,3 +1,15 @@
+function Protect-DiagnosticCsvValue {
+  param(
+    [AllowNull()]
+    [AllowEmptyString()]
+    [string]$Value
+  )
+
+  if ([string]::IsNullOrEmpty($Value)) { return $Value }
+  if ($Value[0] -in @('=', '+', '-', '@')) { return "'$Value" }
+  return $Value
+}
+
 function Save-DiagnosticResults {
   <#
   .SYNOPSIS
@@ -19,7 +31,7 @@ function Save-DiagnosticResults {
   $jsonContent = ConvertTo-Json -InputObject @($Results) -Depth 6
   [System.IO.File]::WriteAllText($JsonPath, $jsonContent, $utf8NoBom)
 
-  $csvLines = $Results | Select-Object Timestamp, Round, Protocol, Host, PingStatus, TracertStatus, PathpingStatus, Tcp443Status, PortsStatus, OverallStatus, PingOk, TracertOk, PathpingOk, Tcp443OK | ConvertTo-Csv -NoTypeInformation
+  $csvLines = $Results | Select-Object Timestamp, Round, Protocol, @{ Name = 'Host'; Expression = { Protect-DiagnosticCsvValue $_.Host } }, PingStatus, TracertStatus, PathpingStatus, Tcp443Status, PortsStatus, OverallStatus, PingOk, TracertOk, PathpingOk, Tcp443OK | ConvertTo-Csv -NoTypeInformation
   $csvContent = $csvLines -join [Environment]::NewLine
   [System.IO.File]::WriteAllText($CsvPath, $csvContent, $utf8NoBom)
 

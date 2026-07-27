@@ -1,4 +1,28 @@
-# Report and summary helpers (private to Iperf3TestSuite)
+# Report and summary helpers (private to NetworkLantern.Throughput)
+
+function Set-Iperf3JsonFileAtomic {
+  [CmdletBinding()]
+  [OutputType([void])]
+  param(
+    [Parameter(Mandatory)]
+    [string]$Path,
+    [Parameter(Mandatory)]
+    [object]$InputObject
+  )
+  $directory = Split-Path -Parent $Path
+  $tempName = ".{0}.{1}.tmp" -f ([System.IO.Path]::GetFileName($Path)), ([guid]::NewGuid().ToString('N'))
+  $tempPath = Join-Path -Path $directory -ChildPath $tempName
+  try {
+    $InputObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $tempPath -Encoding UTF8 -NoNewline
+    [System.IO.File]::Move($tempPath, $Path, $true)
+    $tempPath = $null
+  }
+  finally {
+    if ($tempPath -and (Test-Path -LiteralPath $tempPath)) {
+      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
 
 function Build-RunSummary {
   [CmdletBinding()]
@@ -29,7 +53,11 @@ function Build-RunSummary {
     [nullable[double]]$ThresholdMaxLossPct,
     [nullable[double]]$ThresholdMaxJitterMs
   )
-  $failed = @($Results | Where-Object { $_.ExitCode -ne 0 })
+  $failed = @($Results | Where-Object {
+      $_.ExitCode -ne 0 -or
+      $_.JsonParseError -or
+      ($_.PSObject.Properties.Name -contains 'MetricError' -and $_.MetricError)
+    })
   $succeededCount = $TestCount - $failed.Count
   if ($succeededCount -lt 0) { $succeededCount = 0 }
   $status = if ($TestCount -eq 0 -or $failed.Count -eq $TestCount) { 'TotalFailure' } elseif ($failed.Count -gt 0) { 'PartialFailure' } else { 'Success' }
@@ -49,6 +77,7 @@ function Build-RunSummary {
           DSCP           = $_.DSCP
           ExitCode       = $_.ExitCode
           JsonParseError = $_.JsonParseError
+          MetricError    = if ($_.PSObject.Properties.Name -contains 'MetricError') { $_.MetricError } else { $null }
         }
       }
   )
@@ -57,7 +86,9 @@ function Build-RunSummary {
   $hasThresholds = ($null -ne $ThresholdMinThroughputMbps) -or ($null -ne $ThresholdMaxLossPct) -or ($null -ne $ThresholdMaxJitterMs)
   if ($hasThresholds) {
     foreach ($r in $Results) {
-      if ($r.ExitCode -ne 0) { continue }  # only evaluate succeeded tests
+      if ($r.ExitCode -ne 0 -or
+          $r.JsonParseError -or
+          ($r.PSObject.Properties.Name -contains 'MetricError' -and $r.MetricError)) { continue }  # only evaluate succeeded tests
       $m = $r.Metrics
       if (-not $m) { continue }
       $reasons = @()
@@ -108,6 +139,7 @@ function Build-RunSummary {
       $groups = @{}
       foreach ($f in $failed) {
         $reason = if ($f.JsonParseError) { 'JSON parse error' }
+                  elseif ($f.PSObject.Properties.Name -contains 'MetricError' -and $f.MetricError) { $f.MetricError }
                   elseif ($f.RawText -match 'unable to connect|connection refused') { 'connection refused' }
                   elseif ($f.RawText -match 'timed out|timeout') { 'timeout' }
                   elseif ($f.ExitCode -ne 0) { "iperf3 exit $($f.ExitCode)" }
@@ -121,6 +153,14 @@ function Build-RunSummary {
     ThresholdBreaches   = $thresholdBreaches
     ThresholdBreachCount = $thresholdBreaches.Count
     TopFailures     = $topFailures
+    ArtifactStatus  = [pscustomobject]@{
+      Csv         = 'Pending'
+      Json        = 'Pending'
+      SummaryJson = 'Pending'
+      ReportMd    = 'Pending'
+      RunIndex    = 'Pending'
+      Complete    = $false
+    }
     Supplemental    = [pscustomobject]@{
       SummaryJsonPath = $null
       ReportMdPath    = $null
@@ -138,16 +178,24 @@ function Write-Iperf3SupplementalReports {
     [Parameter(Mandatory)]
     [string]$OutDir,
     [Parameter(Mandatory)]
-    [string]$Timestamp
+    [string]$Timestamp,
+    [switch]$DeferSummaryJson
   )
-  $summaryPath = Join-Path -Path $OutDir -ChildPath "iperf3_summary_$Timestamp.json"
+  $plannedSummaryPath = Join-Path -Path $OutDir -ChildPath "iperf3_summary_$Timestamp.json"
+  $summaryPath = $null
   $reportPath = Join-Path -Path $OutDir -ChildPath "iperf3_report_$Timestamp.md"
+  $summaryStatus = 'Pending'
 
-  try {
-    $RunSummary | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
-  } catch {
-    Write-Warning "Failed to write summary JSON: $_"
-    $summaryPath = $null
+  if (-not $DeferSummaryJson) {
+    try {
+      Set-Iperf3JsonFileAtomic -Path $plannedSummaryPath -InputObject $RunSummary
+      $summaryPath = $plannedSummaryPath
+      $summaryStatus = 'OK'
+    } catch {
+      Write-Warning "Failed to write summary JSON: $_"
+      $summaryPath = $null
+      $summaryStatus = 'Warn'
+    }
   }
 
   $lines = New-Object System.Collections.Generic.List[string]
@@ -185,7 +233,8 @@ function Write-Iperf3SupplementalReports {
   }
   [void]$lines.Add('')
   [void]$lines.Add('## Files')
-  [void]$lines.Add("- Summary JSON: $summaryPath")
+  $summaryDisplay = if ($summaryPath) { $summaryPath } else { 'not available' }
+  [void]$lines.Add("- Summary JSON: $summaryDisplay")
   [void]$lines.Add("- This report: $reportPath")
   try {
     Set-Content -LiteralPath $reportPath -Encoding UTF8 -Value ($lines -join [Environment]::NewLine)
@@ -195,8 +244,10 @@ function Write-Iperf3SupplementalReports {
   }
 
   return [pscustomobject]@{
-    SummaryJsonPath = $summaryPath
-    ReportMdPath    = $reportPath
+    SummaryJsonPath   = $summaryPath
+    ReportMdPath      = $reportPath
+    SummaryJsonStatus = $summaryStatus
+    ReportMdStatus    = if ($reportPath) { 'OK' } else { 'Warn' }
   }
 }
 
@@ -209,8 +260,10 @@ function Write-Iperf3RunIndex {
     [Parameter(Mandatory)]
     [pscustomobject]$RunSummary,
     [Parameter(Mandatory)]
+    [AllowNull()][AllowEmptyString()]
     [string]$CsvPath,
     [Parameter(Mandatory)]
+    [AllowNull()][AllowEmptyString()]
     [string]$JsonPath,
     [Parameter(Mandatory)]
     [AllowNull()][AllowEmptyString()][string]$SummaryJsonPath,
@@ -232,49 +285,77 @@ function Write-Iperf3RunIndex {
     summaryJsonPath = $SummaryJsonPath
     reportMdPath    = $ReportMdPath
   }
-  # Load existing index to preserve run history; start fresh if missing or corrupt.
-  $existingRuns = @()
-  if (Test-Path -LiteralPath $indexPath -PathType Leaf) {
-    $indexFileInfo = Get-Item -LiteralPath $indexPath
-    if ($indexFileInfo.Length -gt 1MB) {
-      Write-Warning "Run index file exceeds 1 MB ($($indexFileInfo.Length) bytes); starting fresh."
-    }
-    else {
-      try {
-        $existing = Get-Content -LiteralPath $indexPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
-        if ($existing.ContainsKey('runs') -and $existing['runs'] -is [array]) {
-          $requiredEntryProps = @('timestamp', 'status')
-          $existingRuns = @($existing['runs'] | Where-Object {
-            $entry = $_
-            $valid = $true
-            foreach ($p in $requiredEntryProps) {
-              if (-not ($entry -is [hashtable] -and $entry.ContainsKey($p)) -and
-                  -not ($entry.PSObject -and $entry.PSObject.Properties.Name -contains $p)) {
-                $valid = $false
-                break
-              }
+  $lockPath = "$indexPath.lock"
+  $maxAttempts = 30
+  $delayMs = 100
+  for ($attempt = 0; $attempt -lt $maxAttempts; $attempt++) {
+    $lockStream = $null
+    try {
+      $lockStream = [System.IO.File]::Open(
+        $lockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+
+      # Read, validate, append, and atomically replace while holding one stable
+      # sidecar lock so concurrent writers cannot overwrite each other's entry.
+      $existingRuns = @()
+      if (Test-Path -LiteralPath $indexPath -PathType Leaf) {
+        $indexFileInfo = Get-Item -LiteralPath $indexPath
+        if ($indexFileInfo.Length -gt 1MB) {
+          Write-Warning "Run index file exceeds 1 MB ($($indexFileInfo.Length) bytes); starting fresh."
+        }
+        else {
+          try {
+            $existing = Get-Content -LiteralPath $indexPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+            if ($existing.ContainsKey('runs') -and $existing['runs'] -is [array]) {
+              $requiredEntryProps = @('timestamp', 'status')
+              $existingRuns = @($existing['runs'] | Where-Object {
+                $entry = $_
+                $valid = $true
+                foreach ($p in $requiredEntryProps) {
+                  if (-not ($entry -is [hashtable] -and $entry.ContainsKey($p)) -and
+                      -not ($entry.PSObject -and $entry.PSObject.Properties.Name -contains $p)) {
+                    $valid = $false
+                    break
+                  }
+                }
+                $valid
+              })
             }
-            $valid
-          })
+          }
+          catch { Write-Verbose "Could not read existing run index; starting fresh." }
         }
       }
-      catch { Write-Verbose "Could not read existing run index; starting fresh." }
+
+      $allRuns = @($existingRuns) + @($runEntry)
+      if ($allRuns.Count -gt 50) { $allRuns = $allRuns[($allRuns.Count - 50)..($allRuns.Count - 1)] }
+      $index = [ordered]@{
+        schemaVersion = 2
+        updatedUtc    = (Get-Date).ToUniversalTime().ToString('o')
+        lastRun       = $runEntry
+        runs          = $allRuns
+      }
+      Set-Iperf3JsonFileAtomic -Path $indexPath -InputObject $index
+      return $indexPath
+    }
+    catch [System.IO.IOException] {
+      if ($attempt -lt ($maxAttempts - 1)) {
+        Start-Sleep -Milliseconds $delayMs
+      }
+      else {
+        Write-Warning "Failed to write run index after $maxAttempts lock attempts: $($_.Exception.Message)"
+        return $null
+      }
+    }
+    catch {
+      Write-Warning "Failed to write run index: $_"
+      return $null
+    }
+    finally {
+      if ($lockStream) { $lockStream.Dispose() }
     }
   }
-  # Append current run and cap at 50 most recent entries.
-  $allRuns = @($existingRuns) + @($runEntry)
-  if ($allRuns.Count -gt 50) { $allRuns = $allRuns[($allRuns.Count - 50)..($allRuns.Count - 1)] }
-  $index = [ordered]@{
-    schemaVersion = 2
-    updatedUtc    = (Get-Date).ToUniversalTime().ToString('o')
-    lastRun       = $runEntry
-    runs          = $allRuns
-  }
-  try {
-    $index | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $indexPath -Encoding UTF8
-  } catch {
-    Write-Warning "Failed to write run index: $_"
-    $indexPath = $null
-  }
-  return $indexPath
+  return $null
 }
