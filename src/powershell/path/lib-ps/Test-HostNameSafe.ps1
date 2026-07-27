@@ -11,6 +11,7 @@ function Test-HostNameSafe {
   if ([string]::IsNullOrWhiteSpace($HostName)) { return $false }
   $trimmed = $HostName.Trim()
   if ($trimmed.StartsWith('-')) { return $false }
+  if ($trimmed[0] -in @('=', '+', '@')) { return $false }
   if ($trimmed -match '\s') { return $false }
   if ($trimmed.Contains('/')) { return $false }
   if ($trimmed.Contains('|')) { return $false }

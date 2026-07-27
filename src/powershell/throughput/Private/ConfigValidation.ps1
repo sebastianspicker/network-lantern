@@ -1,4 +1,4 @@
-# Configuration/profile validation helpers (private to Iperf3TestSuite)
+# Configuration/profile validation helpers (private to NetworkLantern.Throughput)
 
 function ConvertTo-Iperf3IntArray {
   [CmdletBinding()]
@@ -200,7 +200,7 @@ function ConvertTo-Iperf3KnownValue {
       if ($v -notin @('TCP', 'UDP', 'Both')) { throw "Invalid Protocol '$v'." }
       return $v
     }
-    default { throw "Unknown parameter key '$Key'. Run Get-Iperf3TestSuiteDefaultParameterSet to see valid parameter names." }
+    default { throw "Unknown parameter key '$Key'. Run Get-NetworkThroughputDefaultParameterSet to see valid parameter names." }
   }
 }
 

@@ -1,4 +1,4 @@
-# Orchestration helpers for Invoke-Iperf3TestSuite (private to Iperf3TestSuite)
+# Orchestration helpers for Measure-NetworkThroughput (private to NetworkLantern.Throughput)
 
 function Build-TestPlan {
   [CmdletBinding()]
@@ -305,11 +305,22 @@ function Write-FinalOutputs {
   $runSummary = Build-RunSummary -Results $AllResultsList.ToArray() -TestCount $AllResultsList.Count -ParseErrorCount $parseErrorCount -Target $FinalResultObject.Target -Port $FinalResultObject.Port -Stack $FinalResultObject.Stack -Timestamp $Timestamp -OutDir $OutDir -StartedUtc $StartedUtc -CompletedUtc $CompletedUtc -ElapsedSeconds $ElapsedSeconds -Iperf3Version $Iperf3Version -ThresholdMinThroughputMbps $ThresholdMinThroughputMbps -ThresholdMaxLossPct $ThresholdMaxLossPct -ThresholdMaxJitterMs $ThresholdMaxJitterMs
   $runSummary.ArtifactStatus.Csv = $csvStatus
   $runSummary.ArtifactStatus.Json = $jsonStatus
-  $supplemental = Write-Iperf3SupplementalReports -RunSummary $runSummary -OutDir $OutDir -Timestamp $Timestamp
-  $runSummary.ArtifactStatus.SummaryJson = $supplemental.SummaryJsonStatus
+  # Create the human-readable report first, but persist the summary JSON only
+  # after every artifact status and supplemental path is final.
+  $supplemental = Write-Iperf3SupplementalReports -RunSummary $runSummary -OutDir $OutDir -Timestamp $Timestamp -DeferSummaryJson
+  $summaryWritePath = Join-Path -Path $OutDir -ChildPath "iperf3_summary_$Timestamp.json"
+  $summaryJsonPath = $null
   $runSummary.ArtifactStatus.ReportMd = $supplemental.ReportMdStatus
-  $runIndexPath = Write-Iperf3RunIndex -OutDir $OutDir -RunSummary $runSummary -CsvPath $CsvPath -JsonPath $JsonPath -SummaryJsonPath $supplemental.SummaryJsonPath -ReportMdPath $supplemental.ReportMdPath
+  $runSummary.Supplemental.SummaryJsonPath = $null
+  $runSummary.Supplemental.ReportMdPath = $supplemental.ReportMdPath
+  # The report and run index deliberately omit the summary path until that leaf
+  # exists. This prevents durable references to a summary whose final write fails.
+  $runIndexPath = Write-Iperf3RunIndex -OutDir $OutDir -RunSummary $runSummary -CsvPath $CsvPath -JsonPath $JsonPath -SummaryJsonPath $null -ReportMdPath $supplemental.ReportMdPath
   $runSummary.ArtifactStatus.RunIndex = if ($runIndexPath) { 'OK' } else { 'Warn' }
+  $runSummary.Supplemental.RunIndexPath = $runIndexPath
+  # The atomic write below is the final operation. Mark its intended success in
+  # the serialized object, then downgrade the in-memory result if the write fails.
+  $runSummary.ArtifactStatus.SummaryJson = 'OK'
   $artifactStatuses = @(
     $runSummary.ArtifactStatus.Csv,
     $runSummary.ArtifactStatus.Json,
@@ -318,14 +329,23 @@ function Write-FinalOutputs {
     $runSummary.ArtifactStatus.RunIndex
   )
   $runSummary.ArtifactStatus.Complete = -not ($artifactStatuses -contains 'Warn')
-  $runSummary.Supplemental.SummaryJsonPath = $supplemental.SummaryJsonPath
-  $runSummary.Supplemental.ReportMdPath = $supplemental.ReportMdPath
-  $runSummary.Supplemental.RunIndexPath = $runIndexPath
+  try {
+    $summaryJsonPath = $summaryWritePath
+    $runSummary.Supplemental.SummaryJsonPath = $summaryJsonPath
+    Set-Iperf3JsonFileAtomic -Path $summaryWritePath -InputObject $runSummary
+  }
+  catch {
+    Write-Warning "Failed to write summary JSON: $_"
+    $summaryJsonPath = $null
+    $runSummary.ArtifactStatus.SummaryJson = 'Warn'
+    $runSummary.ArtifactStatus.Complete = $false
+    $runSummary.Supplemental.SummaryJsonPath = $null
+  }
   return [pscustomobject]@{
     FailedCount      = $failedCount
     ParseErrorCount  = $parseErrorCount
     RunSummary       = $runSummary
-    SummaryJsonPath  = $supplemental.SummaryJsonPath
+    SummaryJsonPath  = $summaryJsonPath
     ReportMdPath     = $supplemental.ReportMdPath
     RunIndexPath     = $runIndexPath
   }

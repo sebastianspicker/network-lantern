@@ -1,43 +1,38 @@
 name: Bug report
-description: Report a problem with the network diagnostics suite
+description: Report a problem with Network Lantern
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug. Do not share credentials, private hostnames,
-        internal IP addresses, raw route traces, or unsanitized logs.
+        Do not include credentials, private hostnames, internal IP addresses,
+        raw route traces, or unsanitized logs.
   - type: textarea
     id: summary
     attributes:
       label: Summary
-      description: What happened? Include a short, clear description.
-      placeholder: "Example: DryRun still changed a registry value..."
+      description: Describe the failure and its effect.
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
-      description: Provide minimal steps to reproduce the issue.
-      placeholder: |
-        1. Run pwsh ...
-        2. Use preset ...
-        3. Observe ...
+      description: Provide the minimal commands and inputs needed to reproduce it.
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
       label: Expected behavior
-      placeholder: What did you expect to happen?
+      description: Describe the expected result.
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
       label: Actual behavior
-      placeholder: What actually happened?
+      description: Describe the observed result, including the exit code if relevant.
     validations:
       required: true
   - type: textarea
@@ -59,5 +54,5 @@ body:
       options:
         - label: I ran with `-DryRun` first (if applicable).
           required: false
-        - label: I created a backup (`-Action Backup`) before applying changes.
+        - label: I checked the automatic backup validation result for a real tuning Apply (if applicable).
           required: false

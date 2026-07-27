@@ -1,8 +1,8 @@
-# Common utility helpers (private to Iperf3TestSuite)
+# Common utility helpers (private to NetworkLantern.Throughput)
 
 # --- Named constants ---
 # Exit codes map to structured ErrorIds (see ErrorClassification.ps1).
-# The CLI script (iPerf3Test.ps1) mirrors these values for process exit codes.
+# The CLI script (Measure-NetworkThroughput.ps1) mirrors these values for process exit codes.
 $script:ExitCodes = @{
   Success          = 0
   InputValidation  = 11
@@ -25,23 +25,6 @@ $script:ProfilesFileLockTimeoutMs    = 3000
 $script:DefaultThresholdMinThroughputMbps = $null
 $script:DefaultThresholdMaxLossPct        = $null
 $script:DefaultThresholdMaxJitterMs       = $null
-
-function Test-PathUnderBase {
-  [CmdletBinding()]
-  [OutputType([bool])]
-  param(
-    [Parameter(Mandatory)]
-    [string]$BasePath,
-    [Parameter(Mandatory)]
-    [string]$CandidatePath
-  )
-  $baseFull = [System.IO.Path]::GetFullPath($BasePath)
-  $candidateFull = [System.IO.Path]::GetFullPath($CandidatePath)
-  $separators = @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  $baseWithSeparator = $baseFull.TrimEnd($separators) + [System.IO.Path]::DirectorySeparatorChar
-  $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-  return $candidateFull.Equals($baseFull, $comparison) -or $candidateFull.StartsWith($baseWithSeparator, $comparison)
-}
 
 function ConvertTo-Iperf3HashtableFromObject {
   [CmdletBinding()]

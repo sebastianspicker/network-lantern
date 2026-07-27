@@ -1,4 +1,4 @@
-# JSON extraction and metric helpers (private to Iperf3TestSuite)
+# JSON extraction and metric helpers (private to NetworkLantern.Throughput)
 
 function New-Iperf3Metric {
   [CmdletBinding()]

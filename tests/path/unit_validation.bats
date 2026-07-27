@@ -230,6 +230,12 @@ setup() {
   assert_output 'a\tb'
 }
 
+@test "json_escape escapes arbitrary JSON control characters" {
+  run json_escape $'a\001b\bc\f'
+  assert_success
+  assert_output 'a\u0001b\bc\f'
+}
+
 @test "contains_item with empty haystack returns failure" {
   run contains_item "x"
   assert_failure

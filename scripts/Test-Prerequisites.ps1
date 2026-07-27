@@ -1,7 +1,11 @@
 <#
 .SYNOPSIS
-  Reports local tool and module readiness without installing anything.
+Checks local verification prerequisites without installing or changing anything.
+
+.PARAMETER IncludeIperf3
+Also require iperf3 for live throughput runs.
 #>
+
 [CmdletBinding()]
 param(
   [switch]$IncludeIperf3
@@ -10,53 +14,58 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$requiredModules = @{
-  PSScriptAnalyzer = '1.24.0'
-  Pester           = '5.7.1'
+$checks = [System.Collections.Generic.List[object]]::new()
+
+function Add-PrerequisiteCheck {
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][bool]$Available,
+    [Parameter(Mandatory)][string]$Detail
+  )
+
+  $checks.Add([pscustomobject]@{
+      Name = $Name
+      Available = $Available
+      Detail = $Detail
+    })
 }
 
-$requiredCommands = @('pwsh', 'bash', 'git', 'shellcheck', 'bats')
-if ($IncludeIperf3) {
-  $requiredCommands += 'iperf3'
-}
+$powerShellReady = $PSVersionTable.PSVersion.Major -ge 7
+Add-PrerequisiteCheck -Name 'PowerShell 7+' -Available $powerShellReady -Detail $PSVersionTable.PSVersion.ToString()
 
-$results = New-Object System.Collections.Generic.List[object]
-
-foreach ($commandName in $requiredCommands) {
+foreach ($commandName in @('git', 'bash', 'shellcheck', 'bats', 'jq')) {
   $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue
-  $results.Add([pscustomobject]@{
-    Type     = 'Command'
-    Name     = $commandName
-    Required = 'present'
-    Found    = [bool]$command
-    Version  = if ($command -and $command.Version) { $command.Version.ToString() } else { '' }
-    Path     = if ($command) { $command.Source } else { '' }
-  })
+  $detail = if ($command) { $command.Source } else { 'not found on PATH' }
+  Add-PrerequisiteCheck -Name $commandName -Available ([bool]$command) -Detail $detail
 }
 
-foreach ($entry in $requiredModules.GetEnumerator() | Sort-Object Key) {
-  $module = Get-Module -ListAvailable -Name $entry.Key |
-    Where-Object { $_.Version -eq [version]$entry.Value } |
+foreach ($moduleRequirement in @(
+    [pscustomobject]@{ Name = 'PSScriptAnalyzer'; Version = [version]'1.24.0' }
+    [pscustomobject]@{ Name = 'Pester'; Version = [version]'5.7.1' }
+  )) {
+  $module = Get-Module -ListAvailable -Name $moduleRequirement.Name |
+    Where-Object { $_.Version -eq $moduleRequirement.Version } |
     Select-Object -First 1
-
-  $newestModule = Get-Module -ListAvailable -Name $entry.Key |
-    Sort-Object Version -Descending |
-    Select-Object -First 1
-
-  $results.Add([pscustomobject]@{
-    Type     = 'PowerShellModule'
-    Name     = $entry.Key
-    Required = $entry.Value
-    Found    = [bool]$module
-    Version  = if ($module) { $module.Version.ToString() } elseif ($newestModule) { "found $($newestModule.Version)" } else { '' }
-    Path     = if ($module) { $module.Path } elseif ($newestModule) { $newestModule.Path } else { '' }
-  })
+  $detail = if ($module) { $module.Version.ToString() } else { "required version $($moduleRequirement.Version) not found" }
+  Add-PrerequisiteCheck -Name $moduleRequirement.Name -Available ([bool]$module) -Detail $detail
 }
 
-$results | Format-Table -AutoSize
+if ($IncludeIperf3) {
+  $iperf3 = Get-Command -Name 'iperf3' -ErrorAction SilentlyContinue
+  $detail = if ($iperf3) { $iperf3.Source } else { 'not found on PATH' }
+  Add-PrerequisiteCheck -Name 'iperf3' -Available ([bool]$iperf3) -Detail $detail
+}
 
-$missing = @($results | Where-Object { -not $_.Found })
+foreach ($check in $checks) {
+  $status = if ($check.Available) { 'OK' } else { 'MISSING' }
+  Write-Output "[$status] $($check.Name): $($check.Detail)"
+}
+
+$missing = @($checks | Where-Object { -not $_.Available })
 if ($missing.Count -gt 0) {
-  [Console]::Error.WriteLine("Missing prerequisite(s): $($missing.Name -join ', ')")
+  [Console]::Error.WriteLine("Missing prerequisites: $($missing.Name -join ', ')")
   exit 1
 }
+
+Write-Output 'All requested prerequisites are available.'
+exit 0

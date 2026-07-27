@@ -4,8 +4,8 @@
 
 ## Testing
 
-- [ ] `pwsh -NoProfile -Command 'Invoke-ScriptAnalyzer -Path . -Recurse'`
-- [ ] `pwsh -NoProfile -Command 'Invoke-Pester -Path ./tests -CI'`
+- [ ] Ran the complete gate: `./scripts/ci-local.sh`
+- [ ] If the complete gate was unavailable, ran the PowerShell-only fallback: `pwsh -NoProfile -NonInteractive -File ./scripts/ci.ps1 -NoInstall`
 
 ## Risk / Impact
 

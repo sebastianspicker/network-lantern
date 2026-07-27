@@ -3,26 +3,11 @@
 Shared path helper utilities for CLI/GUI scripts.
 #>
 
-# INTENTIONAL DUPLICATION: Test-PathUnderBase is duplicated from src/Private/Common.ps1.
-# This copy exists for CLI/GUI scripts that dot-source this file before the module loads.
-# The module's private copy is the canonical source. If you change the logic, you MUST
-# update both copies to keep them in sync.
-function Test-PathUnderBase {
-  [CmdletBinding()]
-  [OutputType([bool])]
-  param(
-    [Parameter(Mandatory)]
-    [string]$BasePath,
-    [Parameter(Mandatory)]
-    [string]$CandidatePath
-  )
-  $baseFull = [System.IO.Path]::GetFullPath($BasePath)
-  $candidateFull = [System.IO.Path]::GetFullPath($CandidatePath)
-  $separators = @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  $baseWithSeparator = $baseFull.TrimEnd($separators) + [System.IO.Path]::DirectorySeparatorChar
-  $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-  return $candidateFull.Equals($baseFull, $comparison) -or $candidateFull.StartsWith($baseWithSeparator, $comparison)
+$pathUnderBaseHelper = Join-Path $PSScriptRoot '../src/powershell/throughput/Private/Test-PathUnderBase.ps1'
+if (-not (Test-Path -LiteralPath $pathUnderBaseHelper -PathType Leaf)) {
+  throw "Shared path helper is missing: $pathUnderBaseHelper"
 }
+. $pathUnderBaseHelper
 
 function Resolve-ConfigPath {
   [CmdletBinding()]
@@ -53,6 +38,22 @@ function Resolve-ConfigPath {
   return $resolved
 }
 
+function Invoke-PathOpenerProcess {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [string]$Command,
+    [Parameter(Mandatory)]
+    [string]$Path
+  )
+
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $Command
+  $startInfo.UseShellExecute = $false
+  $startInfo.ArgumentList.Add($Path)
+  [System.Diagnostics.Process]::Start($startInfo) | Out-Null
+}
+
 function Open-FolderOrFile {
   [CmdletBinding()]
   param(
@@ -60,19 +61,23 @@ function Open-FolderOrFile {
     [string]$Path
   )
   $openerPath = [System.IO.Path]::GetFullPath($Path)
+  $openerCommand = $null
   if ($IsWindows) {
-    Start-Process explorer.exe -ArgumentList @($openerPath)
+    $openerCommand = 'explorer.exe'
   }
   elseif ($IsMacOS) {
-    Start-Process 'open' -ArgumentList @($openerPath)
+    $openerCommand = 'open'
   }
   else {
     $xdgOpen = Get-Command 'xdg-open' -ErrorAction SilentlyContinue
     if ($xdgOpen) {
-      Start-Process 'xdg-open' -ArgumentList @($openerPath)
+      $openerCommand = $xdgOpen.Source
     }
     else {
       Write-Warning "No file opener found. Path: $openerPath"
+      return
     }
   }
+
+  Invoke-PathOpenerProcess -Command $openerCommand -Path $openerPath
 }

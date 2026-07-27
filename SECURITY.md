@@ -1,30 +1,73 @@
 # Security
 
+Network Lantern runs local diagnostic commands and can modify Windows network
+configuration. It does not expose a network service or authentication endpoint.
+
 ## Reporting a vulnerability
 
-Report suspected vulnerabilities privately to the repository owner. Do not
-open a public issue with exploit details, credentials, internal infrastructure,
-or unsanitized diagnostic output.
+Use the repository's GitHub Security tab and private vulnerability reporting
+flow when available. If private reporting is unavailable, open a public issue
+that requests a private contact channel without including vulnerability
+details.
 
-## Sensitive operational data
+Do not publish credentials, exploit details, internal infrastructure, or
+unsanitized diagnostic output in an issue or pull request.
 
-Treat the following as private unless deliberately sanitized:
+## Supported versions
 
-- hostnames, IP addresses, routes, DNS results, and packet captures
-- throughput targets, raw `iperf3` output, run indexes, and saved profiles
-- registry exports, QoS policy exports, NIC details, and tuning backups
+There is no tagged supported release. Security fixes target `main`. Historical
+project names, legacy repositories, and arbitrary commits are outside the
+support scope.
+
+## Sensitive data
+
+Treat these files and values as sensitive unless they have been reviewed and
+sanitized:
+
+- hostnames, IP addresses, DNS results, routes, and packet captures
+- raw path and `iperf3` output, run indexes, and saved profiles
+- registry exports, QoS policy exports, NIC data, and tuning backups
 - local paths, usernames, machine identifiers, logs, and crash output
 
-The supported local storage and output paths are ignored by Git. Run the
-repository secret scan and inspect `git status --short` before publishing.
+The default generated-data paths are listed in `README.md` and ignored by Git.
+An ignored file is not safe to publish by default.
 
-## Security boundaries
+## Execution boundaries
 
-- The suite exposes no network service or authentication surface.
-- Diagnostic targets are operator-supplied and passed to native tools through
-  validated argument arrays.
-- Windows tuning is optional. Apply and restore operations can require
-  administrator rights and modify registry, QoS, NIC, and power-plan state.
-- Restore validates manifest compatibility and artifact integrity before
-  applying backup contents.
-- The latest `main` branch is the supported source version.
+- Host and path inputs are validated before native tools are invoked.
+- Native commands receive argument arrays instead of interpolated shell command
+  strings.
+- PowerShell path `-DryRun`, Bash path `--dry-run`, and a normal throughput
+  `-WhatIf` run do not probe the network or write result files.
+- Throughput profile operations are writes. `-SaveProfile -WhatIf` saves the
+  profile, and `-DeleteProfile` modifies the selected store.
+- Windows tuning `-DryRun` does not write backups, registry values, QoS
+  policies, NIC settings, or power-plan state.
+- Windows tuning `Apply`, `Backup`, and `Restore` require elevation.
+- Apply verifies its backup manifest, required artifacts, digests, and path
+  trust before tuning mutation.
+- Restore validates its input, copies approved artifacts to protected staging,
+  and revalidates staging before each restore component.
+
+These checks reduce accidental or malicious input handling risk. They do not
+replace operating-system backups, access control, or a tested recovery plan.
+
+## Operator guidance
+
+Run diagnostics only against targets you are authorized to test. Throughput
+tests can consume substantial bandwidth and may affect other users of the
+network or server.
+
+Use real Windows tuning mutation only on a system with an independent recovery
+method. The elevated apply and restore cycle has not been validated on a
+disposable Windows VM for the current revision.
+
+Before publishing repository changes, run:
+
+```bash
+git status --short
+pwsh -NoProfile -NonInteractive -File scripts/Invoke-SecretScan.ps1
+```
+
+Review all tracked and untracked publication candidates manually after the
+scan.

@@ -1,4 +1,4 @@
-# Error classification helpers (private to Iperf3TestSuite)
+# Error classification helpers (private to NetworkLantern.Throughput)
 # Dispatch order matters: check structured ErrorIds first (already classified), then
 # regex-match exception messages from most-specific to least-specific category.
 # InputValidation > Prerequisite > Connectivity > Internal (fallback)
@@ -13,7 +13,7 @@ function Resolve-Iperf3ClassifiedError {
   $msg = [string]$ErrorRecord.Exception.Message
   $fqid = [string]$ErrorRecord.FullyQualifiedErrorId
 
-  if ($fqid -like 'Iperf3TestSuite.*') {
+  if ($fqid -like 'NetworkLantern.Throughput.*') {
     return [pscustomobject]@{
       ErrorId  = ($fqid -split ',')[0]
       Category = [System.Management.Automation.ErrorCategory]::NotSpecified
@@ -27,7 +27,7 @@ function Resolve-Iperf3ClassifiedError {
     $msg -match 'Cannot validate argument on parameter|Cannot bind parameter|Invalid value for key|Target is required|Invalid Target|ProfileName is required|Profile .+ not found|At least one DSCP class is required|Profiles file path must be under|Configuration path must be under|invalid characters|\.json extension|exceeds maximum length|control characters|must not look like an option|Unknown parameter key|Invalid TCP window size|Invalid DSCP class|Unknown DSCP class'
   ) {
     return [pscustomobject]@{
-      ErrorId  = 'Iperf3TestSuite.InputValidation'
+      ErrorId  = 'NetworkLantern.Throughput.InputValidation'
       Category = [System.Management.Automation.ErrorCategory]::InvalidArgument
       Message  = $msg
     }
@@ -35,7 +35,7 @@ function Resolve-Iperf3ClassifiedError {
 
   if ($msg -match 'iperf3.*required|only supported on Windows|ping.exe is required|profiles file is invalid|Profiles file exceeds maximum size') {
     return [pscustomobject]@{
-      ErrorId  = 'Iperf3TestSuite.Prerequisite'
+      ErrorId  = 'NetworkLantern.Throughput.Prerequisite'
       Category = [System.Management.Automation.ErrorCategory]::ResourceUnavailable
       Message  = $msg
     }
@@ -43,7 +43,7 @@ function Resolve-Iperf3ClassifiedError {
 
   if ($msg -match 'ICMP reachability|TCP port') {
     return [pscustomobject]@{
-      ErrorId  = 'Iperf3TestSuite.Connectivity'
+      ErrorId  = 'NetworkLantern.Throughput.Connectivity'
       Category = [System.Management.Automation.ErrorCategory]::ConnectionError
       Message  = $msg
     }
@@ -51,7 +51,7 @@ function Resolve-Iperf3ClassifiedError {
 
   Write-Verbose "Error classified as Internal (unmatched pattern): $msg"
   return [pscustomobject]@{
-    ErrorId  = 'Iperf3TestSuite.Internal'
+    ErrorId  = 'NetworkLantern.Throughput.Internal'
     Category = [System.Management.Automation.ErrorCategory]::NotSpecified
     Message  = $msg
   }

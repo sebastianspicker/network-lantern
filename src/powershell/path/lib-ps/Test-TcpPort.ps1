@@ -1,13 +1,11 @@
 function Test-TcpPort {
   <#
   .SYNOPSIS
-    Test TCP connectivity to a host:port with DNS resolution and trace route.
+    Test TCP connectivity to a host:port with DNS resolution.
   .PARAMETER HostName
     Target host.
   .PARAMETER Port
     TCP port number.
-  .PARAMETER Hops
-    Maximum TTL / hop count for the trace route (default 20).
   .PARAMETER Protocol
     IPv4 or IPv6 (default IPv4).
   .PARAMETER DnsTimeoutMs
@@ -18,7 +16,6 @@ function Test-TcpPort {
   param(
     [Parameter(Mandatory)][string]$HostName,
     [Parameter(Mandatory)][int]$Port,
-    [int]$Hops = 20,
     [ValidateSet('IPv4', 'IPv6')]
     [string]$Protocol = 'IPv4',
     [int]$DnsTimeoutMs = 5000
@@ -39,11 +36,7 @@ function Test-TcpPort {
   $tncParams = @{
     ComputerName     = $target
     Port             = $Port
-    TraceRoute       = $true
     InformationLevel = 'Detailed'
-  }
-  if ($PSVersionTable.PSVersion.Major -ge 7) {
-    $tncParams['Hops'] = $Hops
   }
   return (Test-NetConnection @tncParams)
 }

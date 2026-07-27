@@ -1,14 +1,2 @@
+# Keep text files deterministic across Windows and Unix checkouts.
 * text=auto eol=lf
-
-*.7z binary
-*.dll binary
-*.exe binary
-*.gif binary
-*.gz binary
-*.ico binary
-*.jpeg binary
-*.jpg binary
-*.pdf binary
-*.png binary
-*.pdb binary
-*.zip binary

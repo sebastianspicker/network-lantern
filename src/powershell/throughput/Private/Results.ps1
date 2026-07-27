@@ -1,4 +1,4 @@
-# CSV row and result list helpers (private to Iperf3TestSuite)
+# CSV row and result list helpers (private to NetworkLantern.Throughput)
 
 function Protect-CsvValue {
   <#

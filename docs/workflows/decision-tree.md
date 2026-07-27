@@ -1,28 +1,32 @@
-# Decision Tree
+# Choosing a workflow
 
-```mermaid
-flowchart TD
-    START([Start]) --> Q1{"Can I reach it?\nWhere does the path break?"}
-    Q1 -->|Yes| Q2{"How much throughput\ncan I sustain under load?"}
-    Q1 -->|No / Unsure| PATH["Run Path\nNetPathSuite.ps1 / mtr-test-suite.sh"]
-    Q2 -->|Yes| THRU["Run Throughput\niPerf3Test.ps1"]
-    Q2 -->|No / Baseline only| PATH
-    PATH --> Q3{"Windows endpoint\npolicy suspected?"}
-    THRU --> Q3
-    Q3 -->|Yes| WINT["Run WindowsTuning\nOptimize-NetworkPath.ps1\nthen rerun diagnostics"]
-    Q3 -->|No| DONE([Done])
-    WINT --> DONE
+| Need | Command or workflow | Notes |
+| --- | --- | --- |
+| Reachability, route, latency, or loss | direct path entrypoint or `-Workflow Path` | PowerShell live runs require Windows; Bash live runs require `mtr` |
+| Path evidence, with optional throughput | `-Workflow Triage` | Throughput runs only when `-IperfTarget` is set |
+| TCP or UDP load measurement | direct throughput entrypoint or `-Workflow Throughput` | Requires an `iperf3` server |
+| Path plus one throughput sample | `-Workflow Baseline` | Requires `-IperfTarget` |
+| Inspect expected Windows QoS state | `-Workflow WindowsTuning -TuningAction Verify` | Read-only |
+| Preview Windows changes | `-Workflow WindowsTuning -TuningAction Apply -DryRun` | Does not require elevation |
+| Apply or restore Windows changes | direct tuning entrypoint or `WindowsTuning` workflow | Requires elevation and an independent recovery plan |
+
+Start by previewing the selected command. For example:
+
+```powershell
+pwsh -NoProfile -File .\Invoke-NetworkLantern.ps1 `
+  -Workflow Triage -IperfTarget iperf3.example.net -DryRun
 ```
 
-## Start here
+For a live investigation:
 
-1. If the question is "can I reach it and where does the path break?", use `Path`.
-2. If the question is "how much throughput can I sustain under load?", use `Throughput`.
-3. If Windows endpoint policy might be hurting results, use `WindowsTuning` after diagnostics, not before by default.
+1. Collect path evidence with explicit hosts and protocols.
+2. Run throughput only against a trusted or operator-controlled `iperf3`
+   server.
+3. Keep the input parameters and output files for both runs.
+4. If Windows endpoint policy remains relevant, run tuning `Verify` and an
+   Apply dry run.
+5. Apply changes only when the system has a tested recovery path. Repeat the
+   same diagnostics afterward so results are comparable.
 
-## Suggested flow
-
-- first-pass issue triage: `Triage`
-- route instability or packet loss: `Path`
-- performance baseline or saturation test: `Throughput`
-- before/after endpoint comparison on Windows: `WindowsTuning` plus rerun diagnostics
+The orchestrator stops when a child exits nonzero and returns that child's exit
+code.
