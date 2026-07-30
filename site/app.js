@@ -2,13 +2,13 @@
   const q = (selector) => document.querySelector(selector);
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   const controls = { path: q('#path-controls'), throughput: q('#throughput-controls'), tuning: q('#tuning-controls') };
-  const copy = {
-    Triage: { description: 'Collect path evidence, then add the configured throughput matrix when a trusted target is supplied.', summary: 'The triage preview starts with path evidence and appends the configured throughput matrix preview.', steps: ['Path diagnostics: ping, tracert, pathping, and TCP 443 check for the selected host.', 'Preview the configured throughput matrix against the supplied iperf3 target.', 'No artifact directories, network connections, or output files are created.'] },
-    Path: { description: 'Preview the Windows path diagnostics matrix for one selected host, protocol, and round.', summary: 'The path preview shows the selected diagnostic sequence without contacting the target.', steps: ['Validate the selected host, protocol, and round.', 'Plan ping, tracert, optional pathping, and TCP 443 diagnostics.', 'No probes run and no JSON or CSV result files are written.'] },
-    Throughput: { description: 'Preview the configured iperf3 throughput matrix against a trusted target.', summary: 'The throughput preview is a matrix plan only; it contains no measurements.', steps: ['Validate the iperf3 target, port, and selected protocol.', 'Plan the configured throughput matrix invocation.', 'No reachability check, MTU probe, TCP connection, or iperf3 process is started.'] },
-    Baseline: { description: 'Plan a comparable path collection followed by one throughput sample.', summary: 'The baseline preview composes one path plan and one single-test throughput plan.', steps: ['Plan path evidence for the selected host.', 'Plan one throughput sample against the supplied target; the orchestrator adds its single-test mode.', 'Preserve real output files together only when running from an authorized source checkout.'] },
-    WindowsTuning: { description: 'Inspect a Windows tuning verification or dry-run plan before any real state change.', summary: 'The Windows tuning preview never verifies, backs up, applies, or restores local state.', steps: ['Validate the selected action, profile, and managed UDP port.', 'Show the corresponding read-only or dry-run plan.', 'No registry values, QoS policies, NIC properties, power plans, or backup files are touched.'] }
-  };
+  const copy = new Map([
+    ['Triage', { description: 'Collect path evidence, then add the configured throughput matrix when a trusted target is supplied.', summary: 'The triage preview starts with path evidence and appends the configured throughput matrix preview.', steps: ['Path diagnostics: ping, tracert, pathping, and TCP 443 check for the selected host.', 'Preview the configured throughput matrix against the supplied iperf3 target.', 'No artifact directories, network connections, or output files are created.'] }],
+    ['Path', { description: 'Preview the Windows path diagnostics matrix for one selected host, protocol, and round.', summary: 'The path preview shows the selected diagnostic sequence without contacting the target.', steps: ['Validate the selected host, protocol, and round.', 'Plan ping, tracert, optional pathping, and TCP 443 diagnostics.', 'No probes run and no JSON or CSV result files are written.'] }],
+    ['Throughput', { description: 'Preview the configured iperf3 throughput matrix against a trusted target.', summary: 'The throughput preview is a matrix plan only; it contains no measurements.', steps: ['Validate the iperf3 target, port, and selected protocol.', 'Plan the configured throughput matrix invocation.', 'No reachability check, MTU probe, TCP connection, or iperf3 process is started.'] }],
+    ['Baseline', { description: 'Plan a comparable path collection followed by one throughput sample.', summary: 'The baseline preview composes one path plan and one single-test throughput plan.', steps: ['Plan path evidence for the selected host.', 'Plan one throughput sample against the supplied target; the orchestrator adds its single-test mode.', 'Preserve real output files together only when running from an authorized source checkout.'] }],
+    ['WindowsTuning', { description: 'Inspect a Windows tuning verification or dry-run plan before any real state change.', summary: 'The Windows tuning preview never verifies, backs up, applies, or restores local state.', steps: ['Validate the selected action, profile, and managed UDP port.', 'Show the corresponding read-only or dry-run plan.', 'No registry values, QoS policies, NIC properties, power plans, or backup files are touched.'] }]
+  ]);
   let active = 'Triage';
   const clean = (value, fallback) => value.trim() || fallback;
   function values() { return { host: clean(q('#host').value, 'example.com'), protocol: q('#protocol').value, round: q('#round').value, skip: q('#skip-pathping').checked, target: clean(q('#iperf-target').value, 'iperf3.example.net'), port: clean(q('#iperf-port').value, '5201'), throughputProtocol: q('#throughput-protocol').value, action: q('#tuning-action').value, profile: q('#tuning-profile').value, udp: clean(q('#udp-port').value, '5201') }; }
@@ -22,7 +22,7 @@
     return `${path} -IperfTarget ${v.target} -IperfPort ${v.port} -ThroughputProtocol ${v.throughputProtocol} -DryRun`;
   }
   function render() {
-    const state = copy[active];
+    const state = copy.get(active);
     q('#workflow-title').textContent = active === 'WindowsTuning' ? 'Windows tuning' : active;
     q('#workflow-description').textContent = state.description;
     q('#plan-summary').textContent = state.summary;
