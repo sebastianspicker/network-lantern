@@ -9,6 +9,14 @@ Network Lantern is a source-based toolkit for network diagnostics. It contains:
 - optional Windows QoS, NIC power-saving, and power-plan configuration
 - a PowerShell entrypoint that composes the path, throughput, and tuning tools
 
+## Static workflow demo
+
+The [GitHub Pages demo](https://sebastianspicker.github.io/network-lantern/) is
+a static, click-through simulation of workflow planning. It uses sanitized
+fixture values and never runs diagnostics, contacts targets, writes files, or
+changes settings. Use a source checkout and the commands in this README for
+real, authorized diagnostic work.
+
 The tools run locally and write files for later inspection. The repository does
 not provide a service, remote API, installer, container image, or package.
 
