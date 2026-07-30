@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="A static simulation of Network Lantern workflow planning.">
+    <title>Network Lantern · workflow preview</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to workflow</a>
+    <header class="site-header">
+      <a class="brand" href="#main" aria-label="Network Lantern workflow preview home"><span class="lantern" aria-hidden="true">◉</span> Network Lantern</a>
+      <span class="demo-label">STATIC DEMO</span>
+      <a class="source-link" href="https://github.com/sebastianspicker/network-lantern">View source <span aria-hidden="true">↗</span></a>
+    </header>
+
+    <aside class="safety-notice" aria-label="Demo safety notice">
+      <strong>Simulation only.</strong> This page makes no network probes, changes no settings, writes no files, and sends no data. All command-capable controls are visibly marked <b>SIMULATED</b>.
+    </aside>
+
+    <main id="main">
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <h1 id="page-title">Plan a bounded investigation before running it.</h1>
+          <p class="lede">A click-through preview of the local PowerShell workflows. Fixture targets and plans are deliberately sanitized; no measurements or live diagnostic results are represented here.</p>
+        </div>
+        <div class="intro-note">
+          <span class="note-dot" aria-hidden="true"></span>
+          <p><b>Local-first tools</b><br>Use the source checkout for real diagnostics.</p>
+        </div>
+      </section>
+
+      <section class="workbench" aria-label="Workflow planner">
+        <nav class="workflow-tabs" aria-label="Workflow choices" role="tablist">
+          <button role="tab" aria-selected="true" aria-controls="workflow-panel" id="tab-triage" data-workflow="Triage">Triage</button>
+          <button role="tab" aria-selected="false" aria-controls="workflow-panel" id="tab-path" data-workflow="Path">Path</button>
+          <button role="tab" aria-selected="false" aria-controls="workflow-panel" id="tab-throughput" data-workflow="Throughput">Throughput</button>
+          <button role="tab" aria-selected="false" aria-controls="workflow-panel" id="tab-baseline" data-workflow="Baseline">Baseline</button>
+          <button role="tab" aria-selected="false" aria-controls="workflow-panel" id="tab-windows" data-workflow="WindowsTuning">Windows tuning</button>
+        </nav>
+
+        <div class="workbench-body">
+          <section class="controls" aria-labelledby="workflow-title">
+            <div class="section-heading">
+              <p class="eyebrow" id="workflow-kind">WORKFLOW</p>
+              <h2 id="workflow-title">Triage</h2>
+              <p id="workflow-description">Collect path evidence, then add the configured throughput matrix when a trusted target is supplied.</p>
+            </div>
+
+            <div id="path-controls" class="control-group">
+              <label for="host">IPv4 host</label>
+              <input id="host" name="host" value="example.com" readonly aria-describedby="fixture-note">
+              <div class="two-column">
+                <div>
+                  <label for="protocol">Protocol</label>
+                  <select id="protocol" name="protocol"><option>IPv4</option><option>IPv6</option></select>
+                </div>
+                <div>
+                  <label for="round">Round</label>
+                  <select id="round" name="round"><option>Standard</option><option>MTU1400_DF</option><option>TTL64_Timeout5s</option></select>
+                </div>
+              </div>
+              <label class="check"><input id="skip-pathping" type="checkbox"> <span>Skip <code>pathping</code></span></label>
+            </div>
+
+            <div id="throughput-controls" class="control-group">
+              <label for="iperf-target">iperf3 target</label>
+              <input id="iperf-target" name="iperf-target" value="iperf3.example.net" readonly aria-describedby="fixture-note">
+              <div class="two-column">
+                <div><label for="iperf-port">Port</label><input id="iperf-port" name="iperf-port" value="5201" readonly></div>
+                <div><label for="throughput-protocol">Protocol</label><select id="throughput-protocol"><option>Both</option><option>TCP</option><option>UDP</option></select></div>
+              </div>
+            </div>
+
+            <div id="tuning-controls" class="control-group" hidden>
+              <div class="two-column">
+                <div><label for="tuning-action">Action</label><select id="tuning-action"><option>Verify</option><option>Apply</option><option>Backup</option><option>Restore</option></select></div>
+                <div><label for="tuning-profile">Profile</label><select id="tuning-profile"><option>Safe</option><option>Measured</option></select></div>
+              </div>
+              <label for="udp-port">Managed UDP port</label>
+              <input id="udp-port" value="5201" readonly>
+              <p class="field-note">Apply, Backup, and Restore change system state in the real tool. This demo always previews only.</p>
+            </div>
+
+            <p class="field-note" id="fixture-note">Fixture fields are fixed to reserved example values in this simulation.</p>
+            <button id="preview" class="primary-action" type="button"><span class="simulated">SIMULATED</span> Preview plan <span aria-hidden="true">→</span></button>
+          </section>
+
+          <section class="plan-panel" id="workflow-panel" role="tabpanel" aria-labelledby="tab-triage">
+            <div class="plan-header"><div><p class="eyebrow">PRECOMPUTED OUTPUT</p><h2>Selected plan</h2></div><span class="status">NO COMMANDS RUN</span></div>
+            <p class="plan-summary" id="plan-summary" aria-live="polite">A dry-run plan for the Triage workflow is ready to inspect.</p>
+            <ol class="plan-steps" id="plan-steps"></ol>
+            <div class="command-wrap">
+              <div class="command-title"><span>Command preview</span><span class="simulated">SIMULATED</span></div>
+              <pre id="command-preview"><code></code></pre>
+            </div>
+            <p class="plan-foot" id="plan-foot">For a real run, review the generated command in the repository documentation and use a source checkout on the authorized host.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="guidance" aria-labelledby="guidance-title">
+        <div><p class="eyebrow">OPERATING PRINCIPLE</p><h2 id="guidance-title">Evidence first. Changes last.</h2></div>
+        <ol>
+          <li><span>01</span> Use explicit hosts, protocols, rounds, and output paths for a bounded live collection.</li>
+          <li><span>02</span> Run throughput only against a trusted or operator-controlled <code>iperf3</code> server.</li>
+          <li><span>03</span> Preview Windows tuning, preserve a recovery path, then repeat comparable diagnostics after any approved change.</li>
+        </ol>
+      </section>
+    </main>
+    <footer><span>Network Lantern</span><span>Static simulation · no live diagnostics</span><a href="https://github.com/sebastianspicker/network-lantern">Repository ↗</a></footer>
+    <script src="app.js"></script>
+  </body>
+</html>
