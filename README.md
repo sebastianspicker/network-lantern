@@ -17,6 +17,16 @@ fixture values and never runs diagnostics, contacts targets, writes files, or
 changes settings. Use a source checkout and the commands in this README for
 real, authorized diagnostic work.
 
+Serve the same tracked artifact locally from the repository root:
+
+```bash
+python3 -m http.server 8000 --bind 127.0.0.1 --directory site
+```
+
+Then open <http://127.0.0.1:8000/>. This repository does not contain a GitHub
+Pages deployment workflow, so the hosted page is a visual reference rather
+than proof that the current worktree has been deployed.
+
 The tools run locally and write files for later inspection. The repository does
 not provide a service, remote API, installer, container image, or package.
 
@@ -46,8 +56,8 @@ Current limitations:
   these switches, so its live throughput workflows currently require Windows.
 - A default full throughput matrix can plan 1,110 tests when `iperf3` supports
   bidirectional mode. Use `-WhatIf` before a live matrix run.
-- The throughput GUI has automated helper and cancellation tests, but no
-  automated visual or end-to-end live-run coverage.
+- The throughput cancellation protocol has direct contract coverage; GUI
+  automation is not retained.
 - `apps/windows-tuning/Invoke-NetworkPathTuning-GUI.ps1` is a text-only
   compatibility entrypoint. It does not open a GUI.
 - Real Windows `Apply`, `Backup`, and `Restore` operations change system state.
