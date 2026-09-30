@@ -7,7 +7,7 @@
 - [ ] Ran the complete gate: `./scripts/ci-local.sh`
 - [ ] If the complete gate was unavailable, ran the documented fallback from [docs/TESTING.md](../docs/TESTING.md) and named every skipped check below (a PowerShell-only run is not equivalent to the gate)
 
-Skipped checks or gaps: 
+Skipped checks or gaps:
 
 ## Risk / Impact
 

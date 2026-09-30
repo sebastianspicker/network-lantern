@@ -43,8 +43,8 @@ async function useNativeFixture(page: import('@playwright/test').Page) {
       if(name==='profiles_save'){fixture.profiles[args.name]=args.parameters;return;}
       if(name==='profiles_delete'){delete fixture.profiles[args.name];return true;}
       if(name==='report_export')return;
-      if(name==='runs_list')return {runs:fixture.empty?[]:[{path:'fixture.json',summary:{status:'partial',total:25}}],total:fixture.empty?0:1,has_more:false,legacy_index:fixture.legacyError?{path:'results/runs.json',error:{category:'parse',message:'Invalid legacy index'}}:null};
-      if(name==='report_read'){if(args.path==='missing.json')throw {category:'io',message:'Report not found'};return {metadata:{status:'partial',source_schema:'fixture',provenance:{engine:'test'}},rows:fixture.empty?[]:Array.from({length:args.offset===0?20:5},(_,n)=>({record:args.offset+n})),offset:args.offset,next_offset:fixture.empty?0:args.offset===0?20:25,total:fixture.empty?0:25,has_more:!fixture.empty&&args.offset===0};}
+      if(name==='runs_list')return {runs:fixture.empty?[]:[{path:'fixture.json',summary:{status:'partial',total:25}}],total:fixture.empty?0:1,has_more:false,legacy_index:fixture.legacyError?{path:'results/runs.json',error:{category:'validation',message:'Invalid legacy index'}}:null};
+      if(name==='report_read'){if(args.path==='missing.json')throw {category:'internal',message:'Report not found'};return {metadata:{status:'partial',source_schema:'fixture',provenance:{engine:'test'}},rows:fixture.empty?[]:Array.from({length:args.offset===0?20:5},(_,n)=>({record:args.offset+n})),offset:args.offset,next_offset:fixture.empty?0:args.offset===0?20:25,total:fixture.empty?0:25,has_more:!fixture.empty&&args.offset===0};}
       if(name==='report_compare')return {failed_delta:null};
       if(name==='start_run')return;
       throw Error('Unexpected fixture command: '+name);
@@ -87,7 +87,7 @@ test('run terminal states preserve partial counts and expose recorded evidence',
 test('reports page through evidence, clear stale comparisons and show empty/error states',async({page})=>{
   await useNativeFixture(page);await page.goto('/');await page.locator('[data-flow="reports"]').click();await expect(page.locator('#run-list')).toContainText('partial');
   await page.locator('[data-report]').click();await expect(page.locator('#rows-page')).toHaveText('0–20 of 25');await page.locator('#rows-next').click();await expect(page.locator('#rows-page')).toHaveText('20–25 of 25');await expect(page.locator('#rows-next')).toBeDisabled();await page.locator('#rows-prev').click();await expect(page.locator('#rows-page')).toHaveText('0–20 of 25');
-  await page.locator('#compare').click();await expect(page.locator('#comparison')).toBeVisible();await page.locator('#report-path').fill('missing.json');await page.locator('#read-report').click();await expect(page.locator('#reports-status')).toHaveText('io: Report not found');await expect(page.locator('#report-detail')).toBeHidden();await expect(page.locator('#comparison')).toBeHidden();
+  await page.locator('#compare').click();await expect(page.locator('#comparison')).toBeVisible();await page.locator('#report-path').fill('missing.json');await page.locator('#read-report').click();await expect(page.locator('#reports-status')).toHaveText('internal: Report not found');await expect(page.locator('#report-detail')).toBeHidden();await expect(page.locator('#comparison')).toBeHidden();
   await page.evaluate(()=>{(window as any).fixture.empty=true;});await page.locator('#refresh-reports').click();await expect(page.locator('#reports-status')).toHaveText('No recorded runs in this directory.');await expect(page.locator('#runs-next')).toBeDisabled();await expect(page.locator('#runs-prev')).toBeDisabled();
   await page.locator('#report-path').fill('empty.json');await page.locator('#read-report').click();await expect(page.locator('#rows-page')).toHaveText('0–0 of 0');await expect(page.locator('#rows-next')).toBeDisabled();await expect(page.locator('#rows-prev')).toBeDisabled();
   await page.screenshot({path:join(tmpdir(),'lantern-desktop-reports-empty.png'),fullPage:true});
@@ -125,7 +125,7 @@ for (const staleError of [false,true]) test(`profile selection ignores stale ${s
   await page.locator('[data-profile="Beta"]').click();
   await settleCommand(page, 'profiles_get', {name:'Beta'}, {host:'beta.example'});
   await expect(page.locator('#profile-name')).toHaveValue('Beta');
-  await settleCommand(page, 'profiles_get', {name:'Alpha'}, staleError ? {category:'io',message:'Stale profile failure'} : {host:'alpha.example'}, staleError);
+  await settleCommand(page, 'profiles_get', {name:'Alpha'}, staleError ? {category:'internal',message:'Stale profile failure'} : {host:'alpha.example'}, staleError);
   await expect(page.locator('#profile-name')).toHaveValue('Beta');
   await expect(page.locator('#profile-json')).toHaveValue(/beta.example/);
   await expect(page.locator('#profiles-status')).toHaveText('Profile loaded for review.');
@@ -138,8 +138,8 @@ test('failed or edited pending profile reads preserve the complete previous draf
   await deferCommands(page, 'profiles_get');
   await page.locator('[data-profile="Alpha"]').click();
   await expect(page.locator('#profile-form button[type="submit"]')).toBeDisabled();
-  await settleCommand(page, 'profiles_get', {name:'Alpha'}, {category:'io',message:'Profile unavailable'}, true);
-  await expect(page.locator('#profiles-status')).toHaveText('io: Profile unavailable');
+  await settleCommand(page, 'profiles_get', {name:'Alpha'}, {category:'internal',message:'Profile unavailable'}, true);
+  await expect(page.locator('#profiles-status')).toHaveText('internal: Profile unavailable');
   await expect(page.locator('#profile-name')).toHaveValue('Beta');
   await expect(page.locator('#profile-json')).toHaveValue(/beta.example/);
   await page.locator('[data-profile="Alpha"]').click();
@@ -169,7 +169,7 @@ for (const staleError of [false,true]) test(`snapshot save readback ignores stal
   await expect(page.locator('#profile-form button[type="submit"]')).toBeDisabled();
   await page.locator('[data-profile="Beta"]').click();
   await settleCommand(page, 'profiles_get', {name:'Beta'}, {host:'beta.example'});
-  await settleCommand(page, 'profiles_get', {name:'Alpha'}, staleError ? {category:'io',message:'Stale readback failure'} : {host:'snapshot.example'}, staleError);
+  await settleCommand(page, 'profiles_get', {name:'Alpha'}, staleError ? {category:'internal',message:'Stale readback failure'} : {host:'snapshot.example'}, staleError);
   await expect(page.locator('#profile-form button[type="submit"]')).toBeEnabled();
   await expect(page.locator('#profile-name')).toHaveValue('Beta');
   await expect(page.locator('#profile-json')).toHaveValue(/beta.example/);
@@ -225,7 +225,7 @@ for (const staleError of [false,true]) test(`library lists ignore stale ${staleE
   await page.locator('#store').fill('other-profiles.json');
   await page.locator('#load-profiles').click();
   await settleCommand(page, 'profiles_list', {store:'other-profiles.json'}, ['Current profile']);
-  await settleCommand(page, 'profiles_list', {store:'.iperf3/profiles.json'}, staleError ? {category:'io',message:'Stale store failure'} : ['Stale profile'], staleError);
+  await settleCommand(page, 'profiles_list', {store:'.iperf3/profiles.json'}, staleError ? {category:'internal',message:'Stale store failure'} : ['Stale profile'], staleError);
   await expect(page.locator('#profile-list')).toHaveText('Current profile');
   await expect(page.locator('#profiles-status')).toHaveText('1 saved profiles');
   await deferCommands(page, 'runs_list');
@@ -233,7 +233,7 @@ for (const staleError of [false,true]) test(`library lists ignore stale ${staleE
   await page.locator('#report-directory').fill('other-results');
   await page.locator('#refresh-reports').click();
   await settleCommand(page, 'runs_list', {directory:'other-results'}, {runs:[{path:'current.json',summary:{status:'current',total:1}}],total:1,has_more:false});
-  await settleCommand(page, 'runs_list', {directory:'results'}, staleError ? {category:'io',message:'Stale directory failure'} : {runs:[{path:'stale.json',summary:{status:'stale'}}],total:1,has_more:false}, staleError);
+  await settleCommand(page, 'runs_list', {directory:'results'}, staleError ? {category:'internal',message:'Stale directory failure'} : {runs:[{path:'stale.json',summary:{status:'stale'}}],total:1,has_more:false}, staleError);
   await expect(page.locator('#run-list')).toContainText('current');
   await expect(page.locator('#run-list')).not.toContainText('stale');
   await expect(page.locator('#reports-status')).toHaveText('Runs loaded.');
@@ -249,7 +249,7 @@ for (const staleError of [false,true]) test(`report reads and comparisons ignore
   await page.locator('#report-path').fill('current.json');
   await page.locator('#read-report').click();
   await settleCommand(page, 'report_read', {path:'current.json'}, reportPage('current'));
-  await settleCommand(page, 'report_read', {path:'old.json'}, staleError ? {category:'io',message:'Stale report failure'} : reportPage('stale'), staleError);
+  await settleCommand(page, 'report_read', {path:'old.json'}, staleError ? {category:'internal',message:'Stale report failure'} : reportPage('stale'), staleError);
   await expect(page.locator('#report-metadata')).toContainText('current.json');
   await expect(page.locator('#report-rows')).toContainText('current');
   await expect(page.locator('#reports-status')).toHaveText('Report loaded.');
@@ -261,7 +261,7 @@ for (const staleError of [false,true]) test(`report reads and comparisons ignore
   await expect(page.locator('#report-metadata')).toContainText('new.json');
   await page.locator('#compare').click();
   await settleCommand(page, 'report_compare', {current:'new.json'}, {label:'new comparison'});
-  await settleCommand(page, 'report_compare', {current:'current.json'}, staleError ? {category:'io',message:'Stale comparison failure'} : {label:'stale comparison'}, staleError);
+  await settleCommand(page, 'report_compare', {current:'current.json'}, staleError ? {category:'internal',message:'Stale comparison failure'} : {label:'stale comparison'}, staleError);
   await expect(page.locator('#comparison')).toHaveText(/new comparison/);
   await expect(page.locator('#reports-status')).toHaveText('Comparison ready. Null values indicate unavailable evidence.');
 });
@@ -286,7 +286,7 @@ test('baseline edits invalidate pending comparisons and exports serialize captur
   const exports = await page.evaluate(() => (window as any).fixture.calls.filter((item:any) => item.name === 'report_export'));
   expect(exports).toHaveLength(1);
   expect(exports[0].args).toMatchObject({path:'fixture.json',destination:'old-export.json'});
-  await settleCommand(page, 'report_export', {destination:'old-export.json'}, {category:'io',message:'Stale export failure'}, true);
+  await settleCommand(page, 'report_export', {destination:'old-export.json'}, {category:'internal',message:'Stale export failure'}, true);
   await expect(page.locator('#export')).toBeEnabled();
   await expect(page.locator('#reports-status')).toBeEmpty();
 });
@@ -297,7 +297,7 @@ test('unreadable legacy indexes warn while valid native runs remain available', 
   await page.evaluate(() => { (window as any).fixture.legacyError = true; });
   await page.locator('[data-flow="reports"]').click();
   await expect(page.locator('#run-list')).toContainText('partial');
-  await expect(page.locator('#reports-status')).toHaveText('Runs loaded. Legacy index results/runs.json: parse: Invalid legacy index');
+  await expect(page.locator('#reports-status')).toHaveText('Runs loaded. Legacy index results/runs.json: validation: Invalid legacy index');
   await page.locator('[data-report]').click();
   await expect(page.locator('#report-detail')).toBeVisible();
 });

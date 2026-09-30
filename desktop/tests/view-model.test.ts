@@ -84,7 +84,7 @@ describe('run and report summaries', () => {
   });
   it('describes helper status and paging', () => {
     expect(helperDetail({ registration: 'registered' })).toBe('registered');
-    expect(helperDetail({ error: { category: 'io', message: 'Down' } })).toBe('io: Down');
+    expect(helperDetail({ error: { category: 'internal', message: 'Down' } })).toBe('internal: Down');
     expect(helperDetail({})).toBe('Helper status unavailable');
     expect(runsPageLabel(20, 3, 23)).toBe('21–23 of 23');
     expect(runsPageLabel(0, 0, 0)).toBe('0 of 0');

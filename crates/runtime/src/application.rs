@@ -2,111 +2,14 @@
 use crate::{
     config,
     errors::{helper_error, internal, throughput_error, tuning_error},
-    path_config, workflow,
+    path_config,
+    request::{Capability, request},
+    workflow::{self, Step, Workflow, WorkflowPlan},
 };
 use lantern_contracts::{Error, Result};
-use lantern_platform::PROFILE_LIMIT;
 use lantern_throughput::{ServerCapabilities, SuiteConfig, ThroughputPlan};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Capabilities accepted at the request boundary; wire names are the serialized strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Capability {
-    Throughput,
-    PathBasic,
-    PathTrace,
-    Workflow,
-    Tuning,
-}
-impl Capability {
-    pub(crate) fn parse(name: &str) -> Result<Self> {
-        match name {
-            "throughput" => Ok(Self::Throughput),
-            "path_basic" => Ok(Self::PathBasic),
-            "path_trace" => Ok(Self::PathTrace),
-            "workflow" => Ok(Self::Workflow),
-            "tuning" => Ok(Self::Tuning),
-            _ => Err(Error::validation("Unknown capability")),
-        }
-    }
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Throughput => "throughput",
-            Self::PathBasic => "path_basic",
-            Self::PathTrace => "path_trace",
-            Self::Workflow => "workflow",
-            Self::Tuning => "tuning",
-        }
-    }
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRequest {
-    capability: String,
-    #[serde(default)]
-    layers: Vec<Value>,
-    #[serde(default)]
-    strict: bool,
-    workflow: Option<workflow::Workflow>,
-}
-pub(crate) struct Request {
-    pub capability: Capability,
-    pub layers: Vec<Value>,
-    pub strict: bool,
-    pub workflow: Option<workflow::Workflow>,
-}
-pub(crate) fn request(value: &Value) -> Result<Request> {
-    if serde_json::to_vec(value)
-        .map_err(|e| Error::validation(e.to_string()))?
-        .len()
-        > PROFILE_LIMIT
-    {
-        return Err(Error::validation("Request exceeds 1 MiB"));
-    }
-    let mut request: RawRequest =
-        serde_json::from_value(value.clone()).map_err(|e| Error::validation(e.to_string()))?;
-    for layer in &mut request.layers {
-        if layer.get("schema_version").is_some() || layer.get("capability").is_some() {
-            if layer.get("schema_version").and_then(Value::as_u64) != Some(1)
-                || !layer.get("parameters").is_some_and(Value::is_object)
-                || layer.as_object().unwrap().keys().any(|k| {
-                    !["schema_version", "capability", "parameters", "workflow"]
-                        .contains(&k.as_str())
-                })
-            {
-                return Err(Error::validation("Invalid or unsupported profile envelope"));
-            }
-            if layer["capability"] != request.capability {
-                return Err(Error::validation(
-                    "Profile capability does not match requested capability",
-                ));
-            }
-            if request.capability == "workflow"
-                && let Some(flow) = layer.get("workflow")
-            {
-                let saved: workflow::Workflow = serde_json::from_value(flow.clone())
-                    .map_err(|e| Error::validation(e.to_string()))?;
-                if request.workflow.is_some_and(|selected| selected != saved) {
-                    return Err(Error::validation(
-                        "Saved workflow does not match the selected workflow",
-                    ));
-                }
-                request.workflow = Some(saved);
-            }
-            *layer = layer
-                .get("parameters")
-                .cloned()
-                .ok_or_else(|| Error::validation("Profile parameters missing"))?;
-        }
-    }
-    Ok(Request {
-        capability: Capability::parse(&request.capability)?,
-        layers: request.layers,
-        strict: request.strict,
-        workflow: request.workflow,
-    })
-}
 pub async fn doctor() -> Value {
     let helper = helper_operation("status")
         .await
@@ -246,13 +149,13 @@ pub fn plan_request(value: &Value) -> Result<Value> {
             let mut profile = json!({});
             let mut explicit = json!({});
             for layer in &req.layers {
-                let normalized = workflow::workflow_layer(layer)?;
+                let normalized = workflow_layer(layer)?;
                 if explicit != json!({}) {
-                    workflow::deep_merge(&mut profile, &explicit);
+                    deep_merge(&mut profile, &explicit);
                 }
                 explicit = normalized;
             }
-            let plan = workflow::plan(
+            let plan = resolve_workflow(
                 req.workflow.unwrap_or_default(),
                 &profile,
                 &explicit,
@@ -260,7 +163,7 @@ pub fn plan_request(value: &Value) -> Result<Value> {
             )?;
             let mut steps = Vec::new();
             for step in &plan.steps {
-                steps.push(plan_request(&workflow::step_request(step, req.strict))?);
+                steps.push(plan_request(&step_request(step, req.strict))?);
             }
             Ok(
                 json!({"capability":"workflow","workflow":plan.workflow,"steps":steps,"warnings":plan.warnings}),
@@ -274,6 +177,77 @@ pub fn plan_request(value: &Value) -> Result<Value> {
             }))
         }
     }
+}
+/// Resolves a workflow, validating its throughput section as a strict throughput request.
+pub(crate) fn resolve_workflow(
+    workflow: Workflow,
+    profile: &Value,
+    explicit: &Value,
+    strict: bool,
+) -> Result<WorkflowPlan> {
+    workflow::plan(
+        workflow,
+        profile,
+        explicit,
+        strict,
+        check_workflow_throughput,
+    )
+}
+pub(crate) fn check_workflow_throughput(layer: &Value) -> Result<()> {
+    plan_request(&json!({"capability":"throughput","layers":[layer],"strict":true})).map(|_| ())
+}
+/// Merges nested objects from `source` into `target`; other values replace.
+fn deep_merge(target: &mut Value, source: &Value) {
+    if let (Some(target), Some(source)) = (target.as_object_mut(), source.as_object()) {
+        for (k, v) in source {
+            if v.is_object() {
+                let entry = target.entry(k).or_insert_with(|| json!({}));
+                deep_merge(entry, v);
+            } else {
+                target.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+/// Moves flat throughput overrides into the workflow's `throughput` section.
+fn workflow_layer(layer: &Value) -> Result<Value> {
+    let mut value = layer.clone();
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| Error::validation("Workflow settings must be an object"))?;
+    for (from, to) in [
+        ("target", "target"),
+        ("port", "port"),
+        ("protocol", "protocol"),
+        ("max_total_tests", "maxTotalTests"),
+        ("duration_secs", "duration_secs"),
+        ("omit_secs", "omit_secs"),
+        ("single_test", "single_test"),
+        ("bidirectional", "bidirectional"),
+    ] {
+        if let Some(v) = object.remove(from) {
+            let throughput = object
+                .entry("throughput")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    Error::validation(
+                        "Workflow section 'throughput' must be an object when applying overrides",
+                    )
+                })?;
+            throughput.insert(to.into(), v);
+        }
+    }
+    Ok(value)
+}
+/// The capability request that plans one resolved workflow step.
+fn step_request(step: &Step, strict: bool) -> Value {
+    let (capability, layer) = match step {
+        Step::Path(v) => (Capability::PathBasic, v),
+        Step::Throughput(v) => (Capability::Throughput, v),
+        Step::WindowsTuning(v) => (Capability::Tuning, v),
+    };
+    json!({"capability":capability.as_str(),"layers":[layer],"strict":strict})
 }
 pub(crate) fn count(preview: &Value) -> u64 {
     preview["plan"]["total_tests"]

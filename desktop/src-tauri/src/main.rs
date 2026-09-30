@@ -36,12 +36,13 @@ fn start_run(request: Value, out: String, state: State<'_, AppState>) -> Result<
     let id = handle.run_id.clone();
     let manager = state.runs.clone();
     let task_id = id.clone();
+    let throughput = request.get("capability").and_then(Value::as_str) == Some("throughput");
     tauri::async_runtime::spawn(async move {
         let cancel = CancellationToken::new();
         if let Err(error) =
             runtime::execute_prepared(&request, &PathBuf::from(out), handle, &cancel).await
         {
-            manager.failure(&task_id, &error);
+            manager.failure(&task_id, &error, throughput);
         }
     });
     Ok(json!({"run_id":id}))

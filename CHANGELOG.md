@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Repository reconstruction
+
+- Restore regular file modes: only the seven directly invoked shell scripts are
+  executable, and the architecture test now rejects any other executable file.
+- Give process statuses one home (`contracts::exit`) and derive the run state
+  from a status in one place. CLI exit codes are unchanged: CLI tests pin the
+  parse and validation statuses, and runtime tests pin interruption.
+- Fix: a desktop run that fails before writing a summary now reports status `1`
+  for non-throughput capabilities, matching its summary and the CLI, instead of
+  the throughput status table.
+- Split the Rust runtime's application layer into request, planning, execution,
+  errors, workflow, profile, and report modules with no module cycles, and make
+  internal modules crate-private; the summary record is a typed struct
+  with a golden key test.
+- Replace the compressed desktop frontend with focused TypeScript modules. DOM
+  structure, command payloads, and screenshots match the previous interface.
+- Pin run states and error categories shared by Rust and the desktop in
+  `tests/fixtures/contracts/wire-enums.json`.
+- Use one ShellCheck list (`make lint`) and one Pester entrypoint
+  (`scripts/ci.ps1 -Filter`); remove `scripts/Invoke-Tests.ps1`,
+  `scripts/Get-RepoRoot.ps1`, the rename-era identity guard, the retired-path
+  test, and the benchmark harnesses that could not run from a clean checkout.
+- Check that default path targets agree across all five sources, run the
+  architecture tests in Rust CI, and test the planner before Pages deploys it.
+- Remove unused Rust dependencies (`chrono` in helper, `thiserror` in path-trace,
+  `libc` in runtime).
+
 ### Architecture reconstruction
 
 - Add explicit `NetworkLantern.Path` and `NetworkLantern.Workflow` modules and

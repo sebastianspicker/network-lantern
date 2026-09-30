@@ -136,7 +136,9 @@ impl RunManager {
         }
         Ok(())
     }
-    pub fn failure(&self, id: &str, error: &Error) {
+    /// Records an error that ended a run before its summary, using the same exit policy as the
+    /// summary and CLI: only throughput keeps its status table; other capabilities report 1.
+    pub fn failure(&self, id: &str, error: &Error, throughput: bool) {
         if let Ok(mut inner) = self.inner.lock()
             && let Some(active) = inner.active.as_mut().filter(|a| a.progress.run_id == id)
         {
@@ -148,7 +150,7 @@ impl RunManager {
                 active.progress.logs.pop_front();
             }
             active.progress.state = RunState::Failed;
-            active.progress.exit_code = Some(error.category.throughput_exit_code());
+            active.progress.exit_code = Some(exit::for_error(throughput, error.category));
             self.updates.send_replace(Some(active.progress.clone()));
         }
     }
@@ -264,6 +266,25 @@ mod tests {
         let progress = manager.snapshot().unwrap();
         assert_eq!(progress.exit_code, Some(1));
         assert_eq!(progress.state, RunState::PartialFailure);
+    }
+
+    #[test]
+    fn failure_uses_the_capability_exit_policy() {
+        let manager = RunManager::default();
+        for (throughput, category, expected) in [
+            (false, ErrorCategory::Validation, exit::FAILURE),
+            (false, ErrorCategory::Connectivity, exit::FAILURE),
+            (true, ErrorCategory::Validation, exit::INVALID_INPUT),
+            (false, ErrorCategory::Cancelled, exit::CANCELLED),
+            (true, ErrorCategory::Cancelled, exit::CANCELLED),
+        ] {
+            let run = manager.begin(1).unwrap();
+            manager.failure(&run.run_id, &Error::new(category, "fixture"), throughput);
+            let progress = manager.snapshot().unwrap();
+            assert_eq!(progress.exit_code, Some(expected));
+            assert_eq!(progress.state, RunState::Failed);
+            run.finish(progress.exit_code.unwrap(), None);
+        }
     }
 
     #[test]

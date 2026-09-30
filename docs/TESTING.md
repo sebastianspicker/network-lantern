@@ -49,7 +49,8 @@ and then `scripts/ci-rust.sh`; either can be run alone while iterating.
 `scripts/ci-legacy.sh` first checks that `pwsh`, ShellCheck, Bats, `jq`, and
 Node.js 22+ are available, then runs, in order:
 
-1. `make lint`: ShellCheck (`-x`) over every tracked shell script. The
+1. `make lint`: ShellCheck (`-x`) over every tracked shell script, including the
+   Bats `mtr` fakes. The
    `SHELL_SCRIPTS` list in the `Makefile` is the only ShellCheck file list.
 2. The Bash path entrypoint contracts and all Bats tests under `tests/path/bash/`.
 3. Node's built-in test runner over `tests/site/*.test.cjs`.
@@ -155,15 +156,18 @@ writes the profile, and `-DeleteProfile` changes the selected store.
 `.github/workflows/ci.yml` runs on pushes to `main`, pull requests targeting
 `main`, and manual dispatch.
 
-- `path-lint-test` runs the complete local gate on Ubuntu.
+- `path-lint-test` (displayed as "Path lint and tests") runs
+  `scripts/ci-legacy.sh`, the legacy half of the gate, on Ubuntu. The job keeps
+  its historical name because required status checks may refer to it.
 - `powershell-lint-test` runs the secret scan and PowerShell gate on Windows.
 
 The workflow pins third-party actions by commit and caches PSScriptAnalyzer
 1.24.0 and Pester 5.7.1.
 
-`.github/workflows/rust.yml` supplies the matching Rust and desktop jobs, and
-`.github/workflows/pages.yml` publishes the static planner in `site/` to GitHub
-Pages. Neither workflow's configuration proves that remote CI has passed.
+`.github/workflows/rust.yml` runs the steps of `scripts/ci-rust.sh` on Ubuntu,
+Windows, and both macOS architectures, plus opt-in iperf3 interoperability jobs.
+`.github/workflows/pages.yml` runs the planner tests and publishes `site/` to
+GitHub Pages. Neither workflow's configuration proves that remote CI has passed.
 
 ## What the tests cover
 
@@ -211,7 +215,8 @@ Do not present these gaps as verified runtime behavior.
   Bash or WSL environment that runs `scripts/ci-local.sh`.
 - If a focused run selects no tests, use a substring from a Pester `Describe`,
   `Context`, or `It` name.
-- Preserve LF line endings and Git mode `100755` for executable shell entrypoints.
+- Preserve LF line endings. Only the directly invoked shell scripts are Git mode
+  `100755`; the architecture test fails on any other executable file.
 
 ## Rust migration gate
 

@@ -1,7 +1,9 @@
 # Rust application
 
-The Rust migration is under development alongside the existing application.
-Legacy code remains the behavior reference until migration acceptance. A local
+The Rust workspace and desktop are the application under development. The
+PowerShell and Bash implementation stays as the behavior reference until the
+archive trigger in [architecture](architecture.md#legacy-reference-and-archive-trigger)
+is met. A local
 macOS build makes no installer, signing, or operational Windows recovery claim.
 
 ## Local CLI

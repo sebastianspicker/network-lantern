@@ -109,10 +109,6 @@ export function escape(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, c => entities[c]!);
 }
 
-export function printable(value: unknown): string {
-  return escape(JSON.stringify(value, null, 2));
-}
-
 export interface FlowEntry {
   id: Flow;
   label: string;

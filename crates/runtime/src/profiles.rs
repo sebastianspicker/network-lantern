@@ -1,3 +1,4 @@
+use crate::request::Capability;
 use lantern_contracts::{Error, Result, now};
 use lantern_platform::{PROFILE_LIMIT, SidecarLock, atomic_json, read_json};
 use serde_json::{Value, json};
@@ -89,7 +90,7 @@ impl ProfileStore {
         SidecarLock::acquire(Path::new(&name), Duration::from_secs(15))
     }
 }
-pub fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.trim().is_empty()
         || name.chars().count() > 128
         || name
@@ -104,7 +105,7 @@ pub fn validate_name(name: &str) -> Result<()> {
 }
 
 /// Validate stored control input without requiring a target in a partial throughput profile.
-pub fn validate_parameters(parameters: &Value) -> Result<()> {
+pub(crate) fn validate_parameters(parameters: &Value) -> Result<()> {
     if serde_json::to_vec(parameters)
         .map_err(|e| Error::validation(e.to_string()))?
         .len()
@@ -123,7 +124,7 @@ pub fn validate_parameters(parameters: &Value) -> Result<()> {
         .iter()
         .any(|key| parameters.get(key).is_some())
     {
-        crate::workflow::plan(
+        crate::application::resolve_workflow(
             crate::workflow::Workflow::Triage,
             parameters,
             &json!({}),
@@ -163,7 +164,7 @@ pub fn validate_parameters(parameters: &Value) -> Result<()> {
 pub fn profile_parameters(value: &Value) -> Result<Value> {
     let preview = crate::plan_request(value)?;
     fn direct(preview: &Value) -> Value {
-        if preview["capability"] == "throughput" {
+        if preview["capability"] == Capability::Throughput.as_str() {
             let mut parameters = preview["plan"]["config"].clone();
             parameters["bidirectional"] = preview["plan"]["capabilities"]["bidirectional"].clone();
             if let Some(thresholds) = preview["thresholds"].as_object() {
@@ -176,7 +177,7 @@ pub fn profile_parameters(value: &Value) -> Result<Value> {
             preview["settings"].clone()
         }
     }
-    if preview["capability"] != "workflow" {
+    if preview["capability"] != Capability::Workflow.as_str() {
         return Ok(
             json!({"schema_version":1,"capability":preview["capability"],"parameters":direct(&preview)}),
         );
@@ -184,17 +185,19 @@ pub fn profile_parameters(value: &Value) -> Result<Value> {
     let mut parameters = json!({});
     for step in preview["steps"].as_array().unwrap() {
         let resolved = direct(step);
-        if step["capability"] == "path_basic" {
-            parameters["path"] = resolved;
-        } else if step["capability"] == "throughput" {
-            parameters["throughput"] = resolved;
-            if parameters["throughput"]["max_total_tests"].is_null() {
-                parameters["throughput"]["max_total_tests"] = json!(0);
+        let capability = step["capability"]
+            .as_str()
+            .and_then(|name| Capability::parse(name).ok());
+        match capability {
+            Some(Capability::PathBasic) => parameters["path"] = resolved,
+            Some(Capability::Throughput) => {
+                parameters["throughput"] = resolved;
+                if parameters["throughput"]["max_total_tests"].is_null() {
+                    parameters["throughput"]["max_total_tests"] = json!(0);
+                }
             }
-        } else if step["capability"] == "tuning" {
-            parameters["windowsTuning"] = resolved;
-        } else {
-            return Err(Error::validation("Unknown workflow capability"));
+            Some(Capability::Tuning) => parameters["windowsTuning"] = resolved,
+            _ => return Err(Error::validation("Unknown workflow capability")),
         }
     }
     Ok(

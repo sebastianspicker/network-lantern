@@ -1,9 +1,10 @@
 //! Runs one reserved request and publishes its measurement records and summary.
 use crate::{
-    application::{Capability, Request, count, plan_request, request, throughput, tuning},
+    application::{count, plan_request, throughput, tuning},
     errors::{helper_error, internal, throughput_error, tuning_error},
     manager::RunManager,
     path_config,
+    request::{Capability, Request, request},
 };
 use lantern_contracts::{Error, ErrorCategory, Provenance, RECORD_VERSION, Result, exit, now};
 use lantern_platform::{REPORT_LIMIT, atomic_json};
@@ -37,7 +38,8 @@ struct Counts {
     total: u64,
 }
 
-pub async fn execute_request(
+#[cfg(test)]
+pub(crate) async fn execute_request(
     value: &Value,
     out: &Path,
     manager: &RunManager,
@@ -133,7 +135,7 @@ async fn execute_prepared_with_exit_code(
     } else if execution.completed == 0
         && let Err(error) = &result
     {
-        error.category.throughput_exit_code()
+        exit::throughput(error.category)
     } else if result.is_err() || execution.failed > 0 {
         if execution.completed > execution.failed {
             exit::PARTIAL_FAILURE

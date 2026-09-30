@@ -75,17 +75,18 @@ method.
 ## Windows and shell checkouts
 
 `.gitattributes` normalizes text files to LF. Do not convert shell or Bats files
-to CRLF. When you add or rename an executable shell entrypoint, record Git mode
-`100755`:
+to CRLF. Only shell scripts that are invoked directly are executable in Git; every
+other tracked file is `100644`. When you add or rename such a script, record Git
+mode `100755` and add it to the executable allowlist in
+`tests/architecture/RepositoryArchitecture.Tests.ps1`:
 
 ```bash
 git add --chmod=+x path/to/entrypoint.sh
 git ls-files --stage path/to/entrypoint.sh
 ```
 
-The maintained executable entrypoints are `apps/path/test-network-path.sh`,
-`scripts/ci-local.sh`, `scripts/install-test-deps.sh`, and
-`scripts/run-workflow.sh`.
+The executable scripts are `apps/path/test-network-path.sh` and
+`scripts/{ci-local,ci-legacy,ci-rust,install-test-deps,prepare-macos-app,run-workflow}.sh`.
 
 ## Documentation ownership
 
@@ -99,8 +100,8 @@ The maintained executable entrypoints are `apps/path/test-network-path.sh`,
   tuning.
 - `docs/evidence/tuning-matrix.md`: implemented and excluded tuning settings and
   their automated evidence scope.
-- `docs/migration/`: repository-enforced compatibility pages. Keep all four
-  allow-listed filenames present.
+- `docs/migration/`: guides for operators arriving from the four predecessor
+  tools.
 - `SECURITY.md`: vulnerability reporting and operational trust guidance.
 - `CHANGELOG.md`: release-facing changes under the established Unreleased section.
 

@@ -17,11 +17,6 @@ pub enum ErrorCategory {
     Cancelled,
     Busy,
 }
-impl ErrorCategory {
-    pub fn throughput_exit_code(self) -> u8 {
-        exit::throughput(self)
-    }
-}
 /// Process status policy shared by every adapter. Throughput keeps its legacy status table;
 /// other capabilities collapse failures to [`exit::FAILURE`].
 pub mod exit {

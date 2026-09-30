@@ -1,11 +1,25 @@
 # Architecture
 
-Network Lantern is a source-run toolkit built from four independent execution
-capabilities, a workflow planner and adapter, and a static browser planner. It is
-not a service, an installable package, or a single network-probe framework.
+Network Lantern is a source-run network diagnostics toolkit. It is not a service,
+an installable package, or a single network-probe framework. The repository holds
+two implementations of the same capabilities, with a fixed relationship:
 
-The capabilities share repository conventions and can be composed into an ordered
-workflow, but they do not share a probe model or a result schema.
+- The **Rust workspace and Tauri desktop** (`crates/`, `desktop/`) are the
+  application under development. New behavior belongs there. See
+  [Rust application boundaries](#rust-application-boundaries).
+- The **PowerShell and Bash implementation** (`Invoke-NetworkLantern.ps1`,
+  `apps/`, `src/`) is the behavior reference. It stays runnable and tested, and it
+  is changed only for fixes, until the
+  [archive trigger](#legacy-reference-and-archive-trigger) is met.
+
+The static planner in `site/` belongs to neither: it only renders dry-run commands
+for the Rust CLI.
+
+Each implementation has four independent execution capabilities (two path
+engines, throughput, and Windows tuning) that can be composed into an ordered
+workflow. The capabilities share repository conventions but not a probe model or a
+result schema. The sections up to [Trust and privilege
+boundaries](#trust-and-privilege-boundaries) describe the legacy reference.
 
 ## System context
 
@@ -59,7 +73,7 @@ counts, duration estimates, and execution validation.
 | Windows tuning | `apps/windows-tuning/Invoke-NetworkPathTuning.ps1` | Bind the CLI to `NetworkLantern.WindowsTuning`; verify, back up, apply, or restore a limited setting set | Windows registry, QoS, NIC and power-plan reads; optional privileged mutation; backup bundle |
 | Workflow plan | `New-NetworkLanternWorkflowPlan` | Parse a bounded profile, resolve precedence, and return ordered capability steps | Reads profile input; creates no process or artifact |
 | Workflow application | `Invoke-NetworkLantern.ps1` and `apps/workflow/Private/` | Map steps to trusted adapters and execute isolated children | Child PowerShell processes; child-owned artifacts and exit statuses |
-| Static planner | `site/` | Validate input and render dry-run workflow commands | Explicit clipboard copy only; no probes, service calls, files, or browser storage |
+| Static planner | `site/` | Validate input and render dry-run `network-lantern workflow` commands for the Rust CLI | Explicit clipboard copy only; no probes, service calls, files, or browser storage |
 
 The PowerShell modules are source-loaded from manifests and are not published
 as independent packages. Operator guides therefore document the stable app
@@ -240,6 +254,9 @@ an existing native exit-code variable.
 | Root workflow throughput profile | Workflow application and throughput module | Fixed local store under `profiles/` unless the implementation contract changes |
 | Path and throughput artifacts | Owning capability | Written only below the selected output root during live execution |
 | Tuning backups | Windows tuning module | Separate from workflow artifact roots; trusted-path and manifest rules apply |
+| Rust host layer | `runtime` (`local_config`) | `config/hosts.conf` is read relative to the launch directory and snapshotted per reviewed run; when it is absent, the built-in engine defaults apply |
+| Rust profile store | `runtime` (`profiles`) | Defaults to `.iperf3/profiles.json` relative to the launch directory; reads legacy profile names and keys without rewriting them |
+| Rust run records | `runtime` (`execution`, `reports`) | `logs/<run-id>/` by default: versioned summary plus separately published measurements |
 
 Preview modes may read configuration and validate inputs, but they create no
 result or tuning state. Throughput profile save and delete stay explicit
@@ -295,35 +312,106 @@ static planner tests. The static planner is served as ordinary files, and
 - Preserve output schemas, exit codes, locking, cancellation, timeout, backup,
   and restore compatibility unless a deliberate external change is documented.
 
-`tests/architecture/RepositoryArchitecture.Tests.ps1` enforces stable adapters,
-module and Bash loader rules, manifest/export agreement, dependency direction,
-retired-path removal, executable modes, workflow separation, and the static
-planner boundary. The complete validation command is documented in
-[TESTING.md](TESTING.md).
+Architecture rules are enforced mechanically:
 
-## Rust migration boundary
+- `tests/architecture/RepositoryArchitecture.Tests.ps1` (Pester): stable legacy
+  adapters, module and Bash loader rules, manifest/export agreement, dependency
+  direction, workflow separation, the static planner boundary, and the exact set
+  of executable files in Git.
+- `tests/architecture/rust-boundaries.test.cjs` (Node): the exact internal crate
+  dependency edges, engines spawn no CLI tools, packet parsing stays free of IO, the planner has no persistence, and the
+  production desktop grants no test permissions.
+- `tests/architecture/default-hosts.test.cjs` (Node): the default path targets
+  agree across `config/hosts.conf`, both legacy path engines, and both Rust path
+  engines.
 
-The Rust workspace is being introduced alongside the existing application, and the
-legacy implementation stays active until every migration acceptance check passes.
-The crates divide responsibilities like this:
+The complete validation command is documented in [TESTING.md](TESTING.md).
 
-- `crates/contracts` owns transport errors and provenance.
+## Rust application boundaries
+
+Crates depend in one direction, from vocabulary to engines to the application
+facade to adapters. Cargo only rejects cycles, so
+`tests/architecture/rust-boundaries.test.cjs` lists every allowed internal edge
+and fails on any other.
+
+```mermaid
+flowchart TD
+    cli[cli]
+    desktop[desktop/src-tauri]
+    runtime[runtime: configuration, workflows, run manager, records]
+    helper[helper: authenticated privileged helper, client and server]
+    tuning[tuning: Windows providers and protected recovery]
+    basic[path-basic]
+    trace[path-trace]
+    throughput[throughput]
+    pathio[path-io: native sockets and OS primitives]
+    packet[packet: packet build and parse, no IO]
+    platform[platform: bounded unprivileged IO]
+    contracts[contracts: errors, provenance, record version, exit policy]
+
+    cli --> runtime
+    desktop --> runtime
+    runtime --> helper
+    runtime --> tuning
+    runtime --> basic
+    runtime --> trace
+    runtime --> throughput
+    runtime --> platform
+    helper --> tuning
+    helper --> basic
+    helper --> trace
+    helper --> throughput
+    basic --> pathio
+    trace --> pathio
+    throughput --> pathio
+    pathio --> packet
+    platform --> contracts
+```
+
+For readability the diagram omits edges to the leaf crates that most crates use
+directly: `contracts` (throughput, helper, runtime, cli, desktop), `packet`
+(path-basic, path-trace, throughput, runtime), `path-io` (helper, runtime), and
+`platform` (cli, for bounded settings reads).
+
+- `crates/contracts` is the shared vocabulary: `ErrorCategory`, `Error`,
+  `Provenance`, `RECORD_VERSION`, and the `exit` module. `exit` is the only place
+  that defines process statuses (throughput's `11`–`16` table, `1` for other
+  capabilities, `130`/`143` for interruption) and how a failure category maps to
+  them.
 - `crates/platform` owns bounded unprivileged data IO and atomic publication.
 - `crates/packet` owns packet construction and parsing without IO.
 - `crates/path-io` owns shared native socket and OS primitives.
 - `crates/path-basic`, `crates/path-trace`, and `crates/throughput` own separate
   measurement plans, engines, and result semantics.
-- `crates/runtime` resolves configuration and workflows, manages one active run,
-  and writes versioned artifacts.
-- `crates/cli` is an operator adapter.
+- `crates/runtime` is the application facade that both adapters use:
+  - `request` parses a request into a typed capability (a leaf module);
+  - `application` builds plans, layers workflow steps, and supplies `workflow`
+    with its throughput validator;
+  - `workflow` resolves an ordered workflow without depending on planning;
+  - `execution` runs a reviewed request and writes the versioned summary;
+  - `profiles` owns profile stores;
+  - `reports` reads, normalizes, pages, lists, compares, and exports records in
+    one submodule per concern. Readers accept the explicit
+    `SUPPORTED_RECORD_VERSIONS` range, which a test ties to `RECORD_VERSION`,
+    and reject other versions explicitly;
+  - `errors` maps engine, helper, and tuning errors to the shared taxonomy;
+  - `manager` holds the single active run and derives its `RunState`.
+
+  Only `manager`, `profiles`, `reports`, and the planning and execution entry
+  points are public; the other modules are crate-private.
+- `crates/cli` is an operator adapter: argument parsing, output, and signal
+  handling only.
 
 Rust plans run without DNS, sockets, helper authorization, or result writes.
 Execution records include the engine and version, and legacy profiles and reports
 are read and normalized without rewriting their sources or supplying absent
-metrics. The static planner stays independent of all execution and desktop
-privileges. Native platform authorization and recovery require matching-host
-verification before they can be called operationally supported or before legacy is
-archived.
+metrics. Wire names shared with the desktop (`RunState`, `ErrorCategory`) are
+pinned by `tests/fixtures/contracts/wire-enums.json`, which a runtime test and a
+desktop unit test both check.
+
+The helper client and server stay in one crate because they share the protocol
+and the per-platform transports; splitting them would move Windows and macOS
+transport code without a behavior or dependency benefit.
 
 `crates/helper` independently validates authenticated bounded requests, binds
 operations to reviewed hashes and run IDs, rejects replay, and cancels probe work
@@ -333,16 +421,53 @@ recovery, and the generic data IO crate does not authorize privileged filesystem
 registry operations.
 
 `desktop/src-tauri` exposes typed commands, and `desktop/src` presents those results
-without shell or executable inputs. The presentation layer owns request freshness
-for profile editors and report selections; asynchronous responses update only
+without shell or executable inputs. The frontend is plain TypeScript: `markup.ts`
+holds the static page structure, `state.ts` the explicit view state, `model.ts`
+and `render.ts` the pure, unit-tested request and presentation logic, and one
+module per concern (`plan`, `run`, `measurement`, `profiles`, `reports`,
+`library`, `runtime`, `navigation`, with `dom.ts` helpers) wires events to Rust commands through `bridge.ts`.
+
+The presentation layer owns request freshness for profile editors and report
+selections; asynchronous responses update only
 their originating view state. Profile writes are serialized in the UI and retain
 the store/name captured at submission, while the runtime remains the authority
 for validation and persistence. Resolved native path host lists retain explicit
 empty families through planning and profile reloads.
 
-Test-only WebDriver plugins sit behind the
-`e2e` feature, while production defaults embed local frontend assets through
+Test-only WebDriver plugins sit behind the `e2e` feature, while production defaults embed local frontend assets through
 Tauri's custom protocol. Native window-close and application-exit requests cancel
 active measurements before exit; a five-second cleanup timeout leaves the window
 open with cancellation state visible, and new measurements and helper changes are
 rejected while shutdown is pending.
+
+## Legacy reference and archive trigger
+
+The PowerShell and Bash implementation remains because the Rust native path,
+helper, and Windows tuning behavior has not been verified on matching hosts:
+elevated Windows apply and restore, SCM/UAC/named-pipe helper authentication,
+Linux polkit and service operation, signed macOS helper registration, and live
+raw-socket probing. Archive the legacy tree (`Invoke-NetworkLantern.ps1`, `apps/`,
+`src/`, their tests and `scripts/ci-legacy.sh`) once those checks pass on matching
+hosts and the operator guides in `docs/workflows/` describe the Rust surfaces.
+
+Until then the legacy code is maintained for fixes only. Known structural debt is
+left in place deliberately, because restructuring would put the reference behavior
+at risk for code that is scheduled for removal:
+
+- The throughput GUI's cancellation protocol is split between
+  `apps/throughput/Private/GuiRunLifecycle.ps1` and the module's
+  `Private/NativeProcess.ps1`.
+- The throughput CLI adapter repeats module helpers for path containment, exit
+  codes, and profile-name validation.
+- Workflow parameter names and defaults are repeated in `Invoke-NetworkLantern.ps1`,
+  the workflow plan module, and the descriptor table in
+  `apps/workflow/Private/WorkflowApplication.ps1`. The architecture test checks
+  only that the root adapter and plan module parameters agree.
+
+## Repository layout
+
+The top-level split (`crates/` and `desktop/` for Rust, `apps/` and `src/` for the
+legacy reference, `site/`, `tests/`, `scripts/`) follows the two-implementation
+model. A capability-first layout was rejected. It would have rewritten about 100
+path references in tests, scripts, docs, and CI for the legacy tree without
+changing behavior, and that tree is scheduled for archival.

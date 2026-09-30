@@ -65,8 +65,9 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
 Then open <http://127.0.0.1:8000/>. The planner is a convenience layer, not an
-authority. Your local PowerShell preview remains the source of truth for test
-counts, duration estimates, budget checks, and backup validation.
+authority. It emits `network-lantern workflow ... --dry-run` commands for the
+Rust CLI, and that CLI's preview remains the source of truth for test counts,
+duration estimates, budget checks, and backup validation.
 
 ## Requirements
 
@@ -186,14 +187,18 @@ Default output and mutable-state locations:
 | `site/` | Generate example commands in a static browser interface | Static HTML, CSS, and JavaScript; never runs probes or persists input | [Static planner](#screenshot-tour) |
 | `crates/` and `desktop/` | Rust CLI and Tauri desktop under active migration | Rust 1.96.0; in development alongside the behavior reference | [Rust application](docs/RUST.md) |
 
-The Rust CLI and desktop are being built alongside the existing implementation.
-The existing code stays the behavior reference until the migration acceptance
-checks pass, so treat the Rust surfaces as in-progress.
+The Rust CLI and desktop are where new behavior is built. The PowerShell and Bash
+tools stay the tested behavior reference until native privileged behavior is
+verified on matching hosts, so treat the Rust surfaces as in-progress. See
+[the archive trigger](docs/architecture.md#legacy-reference-and-archive-trigger).
 
 ## Repository layout
 
 | Path | Responsibility |
 | --- | --- |
+| `crates/` | Rust workspace: shared contracts, engines, privileged helper, runtime facade, and CLI |
+| `desktop/` | Tauri desktop: TypeScript interface in `src/`, native host in `src-tauri/` |
+| `deployment/helper/` | Privileged helper service and authorization assets per platform |
 | `apps/` | Stable operator-facing adapters and workflow child transport |
 | `src/bash/path/` | MTR path package, with `load.sh` as its only composition root |
 | `src/powershell/path/` | Windows path module |
@@ -202,8 +207,7 @@ checks pass, so treat the Rust surfaces as in-progress.
 | `src/powershell/workflow/` | Pure profile and ordered workflow-plan builder |
 | `site/` | Static command planner |
 | `scripts/` | Development, verification, and shell wrappers; not a product API |
-| `tests/` | Capability behavior suites and repository architecture checks |
-| `crates/`, `desktop/` | Rust workspace and Tauri desktop client (migration in progress) |
+| `tests/` | Legacy capability suites, architecture checks, and shared contract fixtures (Rust tests live in each crate) |
 
 See [docs/architecture.md](docs/architecture.md) for component ownership,
 dependency direction, runtime flows, and security boundaries.

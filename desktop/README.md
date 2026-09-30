@@ -6,6 +6,22 @@ capability checks all go through Rust commands. A plain browser can still render
 the interface, but it reports that the native runtime is unavailable and does not
 simulate a successful result.
 
+## Source layout
+
+- `src/main.ts` mounts the page and wires the modules together.
+- `src/markup.ts` holds the static page structure. Element ids are a contract with
+  the browser and native tests; `tests/fixtures/dom-contract.json` records them.
+- `src/state.ts` is the single view-state object, including the generation
+  counters that discard stale responses.
+- `src/model.ts` (requests, fingerprints, run summaries) and `src/render.ts`
+  (escaped markup fragments) are pure and unit-tested.
+- `src/plan.ts`, `run.ts`, `profiles.ts`, `reports.ts`, `runtime.ts`,
+  `navigation.ts`, `measurement.ts` and `library.ts` each own one view concern.
+- `src/bridge.ts` is the only module that calls Tauri. Browser tests replace it by
+  path, so keep its location and its `native` and `command` exports.
+
+## Commands
+
 From this directory:
 
 ```sh
