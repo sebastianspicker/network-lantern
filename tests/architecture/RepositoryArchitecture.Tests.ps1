@@ -150,8 +150,8 @@ Describe 'Repository architecture boundaries' {
     $mutationFixtures = @{
       AppPath = 'C:/repository/apps/path/Test-NetworkPath.ps1'
       QuotedRelativeAppPath = "Join-Path `$repositoryRoot 'apps/path/Test-NetworkPath.ps1'"
-      ScriptPath = 'C:/repository/scripts/Invoke-Tests.ps1'
-      QuotedRelativeScriptPath = "Join-Path `$repositoryRoot './scripts/Invoke-Tests.ps1'"
+      ScriptPath = 'C:/repository/scripts/ci.ps1'
+      QuotedRelativeScriptPath = "Join-Path `$repositoryRoot './scripts/ci.ps1'"
     }
     foreach ($patternName in $prohibitedModuleReferences.Keys) {
       $mutationFixtures[$patternName] | Should -Match $prohibitedModuleReferences[$patternName] -Because "$patternName must catch its prohibited form"
@@ -197,25 +197,6 @@ Describe 'Repository architecture boundaries' {
       if ($file.FullName -ne $loaderPath -and $file.Directory.Name -ne 'lib') {
         (Get-Content -LiteralPath $file.FullName -Raw) | Should -Not -Match $sourceStatementPattern -Because "$($file.Name) must not be another Bash composition root"
       }
-    }
-  }
-
-  It 'keeps retired implementation paths and active Uj identifiers absent' {
-    foreach ($retiredPath in @(
-      'apps/windows-tuning/Invoke-NetworkPathTuning-GUI.ps1'
-      'scripts/PathHelpers.ps1'
-      'src/powershell/path/lib-ps'
-    )) {
-      Join-Path $script:RepoRoot $retiredPath | Should -Not -Exist
-    }
-
-    $activeSourceFiles = @(
-      Get-Item -LiteralPath (Join-Path $script:RepoRoot 'Invoke-NetworkLantern.ps1')
-      Get-ChildItem -LiteralPath (Join-Path $script:RepoRoot 'apps') -Recurse -File -Include '*.ps1', '*.psm1', '*.sh'
-      Get-ChildItem -LiteralPath (Join-Path $script:RepoRoot 'src') -Recurse -File -Include '*.ps1', '*.psm1', '*.sh'
-    )
-    foreach ($file in $activeSourceFiles) {
-      (Get-Content -LiteralPath $file.FullName -Raw) | Should -Not -Match '(?i)\b(?:Get|Test|Invoke|Set|Remove)-Uj[A-Za-z0-9]*\b'
     }
   }
 

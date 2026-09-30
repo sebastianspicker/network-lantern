@@ -28,14 +28,7 @@ if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.v
   exit 1
 fi
 
-shellcheck -x \
-  "$REPO_ROOT/apps/path/test-network-path.sh" \
-  "$REPO_ROOT/scripts/ci-local.sh" \
-  "$REPO_ROOT/scripts/ci-legacy.sh" \
-  "$REPO_ROOT/scripts/install-test-deps.sh" \
-  "$REPO_ROOT/scripts/run-workflow.sh" \
-  "$REPO_ROOT"/src/bash/path/*.sh \
-  "$REPO_ROOT"/src/bash/path/lib/*.sh
+make -C "$REPO_ROOT" lint
 
 bats "$REPO_ROOT/tests/path/contracts.bats" "$REPO_ROOT/tests/path/bash"
 

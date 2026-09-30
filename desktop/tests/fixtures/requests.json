@@ -1,0 +1,591 @@
+{
+  "triage": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "workflow": "triage",
+          "layers": [
+            {
+              "path": {
+                "hostsIPv4": [
+                  ""
+                ],
+                "hostsIPv6": [],
+                "protocols": [
+                  "IPv4"
+                ],
+                "rounds": [
+                  "Standard"
+                ],
+                "skipPathping": false
+              },
+              "throughput": {
+                "target": null,
+                "port": 5201,
+                "protocol": "Both",
+                "maxTotalTests": 0
+              }
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "workflow": "triage",
+          "layers": [
+            {
+              "path": {
+                "hostsIPv4": [
+                  ""
+                ],
+                "hostsIPv6": [],
+                "protocols": [
+                  "IPv4"
+                ],
+                "rounds": [
+                  "Standard"
+                ],
+                "skipPathping": false
+              },
+              "throughput": {
+                "target": null,
+                "port": 5201,
+                "protocol": "Both",
+                "maxTotalTests": 0
+              }
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "path": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "path_basic",
+          "layers": [
+            {
+              "hostsIPv4": [
+                ""
+              ],
+              "hostsIPv6": [],
+              "protocols": [
+                "IPv4"
+              ],
+              "rounds": [
+                "Standard"
+              ],
+              "skipPathping": false
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "path_basic",
+          "layers": [
+            {
+              "hostsIPv4": [
+                ""
+              ],
+              "hostsIPv6": [],
+              "protocols": [
+                "IPv4"
+              ],
+              "rounds": [
+                "Standard"
+              ],
+              "skipPathping": false
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "throughput": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "throughput",
+          "layers": [
+            {
+              "target": null,
+              "port": 5201,
+              "protocol": "Both",
+              "maxTotalTests": 0
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "throughput",
+          "layers": [
+            {
+              "target": null,
+              "port": 5201,
+              "protocol": "Both",
+              "maxTotalTests": 0
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "baseline": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "workflow": "baseline",
+          "layers": [
+            {
+              "path": {
+                "hostsIPv4": [
+                  ""
+                ],
+                "hostsIPv6": [],
+                "protocols": [
+                  "IPv4"
+                ],
+                "rounds": [
+                  "Standard"
+                ],
+                "skipPathping": false
+              },
+              "throughput": {
+                "target": null,
+                "port": 5201,
+                "protocol": "Both",
+                "maxTotalTests": 0
+              }
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "workflow": "baseline",
+          "layers": [
+            {
+              "path": {
+                "hostsIPv4": [
+                  ""
+                ],
+                "hostsIPv6": [],
+                "protocols": [
+                  "IPv4"
+                ],
+                "rounds": [
+                  "Standard"
+                ],
+                "skipPathping": false
+              },
+              "throughput": {
+                "target": null,
+                "port": 5201,
+                "protocol": "Both",
+                "maxTotalTests": 0
+              }
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "windows_tuning": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "tuning",
+          "layers": [
+            {
+              "action": "Verify",
+              "profile": "Safe",
+              "udpPorts": [
+                5201
+              ],
+              "backupFolder": null,
+              "dscp": 46,
+              "powerPlan": "None",
+              "includeAppPolicies": false,
+              "appPaths": []
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "tuning",
+          "layers": [
+            {
+              "action": "Verify",
+              "profile": "Safe",
+              "udpPorts": [
+                5201
+              ],
+              "backupFolder": null,
+              "dscp": 46,
+              "powerPlan": "None",
+              "includeAppPolicies": false,
+              "appPaths": []
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "path trace IPv6 TCP": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "path_trace",
+          "layers": [
+            {
+              "hostsIPv4": [],
+              "hostsIPv6": [
+                "trace.example"
+              ],
+              "protocols": [
+                "IPv6"
+              ],
+              "rounds": [
+                "TTL10"
+              ],
+              "skipPathping": false,
+              "types": [
+                "TCP6"
+              ]
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "path_trace",
+          "layers": [
+            {
+              "hostsIPv4": [],
+              "hostsIPv6": [
+                "trace.example"
+              ],
+              "protocols": [
+                "IPv6"
+              ],
+              "rounds": [
+                "TTL10"
+              ],
+              "skipPathping": false,
+              "types": [
+                "TCP6"
+              ]
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "throughput UDP custom port": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "throughput",
+          "layers": [
+            {
+              "target": "iperf.example",
+              "port": 5300,
+              "protocol": "UDP",
+              "maxTotalTests": 4
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "throughput",
+          "layers": [
+            {
+              "target": "iperf.example",
+              "port": 5300,
+              "protocol": "UDP",
+              "maxTotalTests": 4
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "tuning backup measured": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "tuning",
+          "layers": [
+            {
+              "action": "Backup",
+              "profile": "Measured",
+              "udpPorts": [
+                5202
+              ],
+              "backupFolder": "C:\\Backups",
+              "dscp": 34,
+              "powerPlan": "HighPerformance",
+              "includeAppPolicies": true,
+              "appPaths": [
+                "C:\\a.exe",
+                "C:\\b.exe"
+              ]
+            },
+            {}
+          ],
+          "strict": false
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "tuning",
+          "layers": [
+            {
+              "action": "Backup",
+              "profile": "Measured",
+              "udpPorts": [
+                5202
+              ],
+              "backupFolder": "C:\\Backups",
+              "dscp": 34,
+              "powerPlan": "HighPerformance",
+              "includeAppPolicies": true,
+              "appPaths": [
+                "C:\\a.exe",
+                "C:\\b.exe"
+              ]
+            },
+            {}
+          ],
+          "strict": false
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "triage strict override": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "workflow": "triage",
+          "layers": [
+            {
+              "path": {
+                "hostsIPv4": [
+                  ""
+                ],
+                "hostsIPv6": [],
+                "protocols": [
+                  "IPv4"
+                ],
+                "rounds": [
+                  "Standard"
+                ],
+                "skipPathping": true
+              },
+              "throughput": {
+                "target": null,
+                "port": 5201,
+                "protocol": "Both",
+                "maxTotalTests": 0
+              }
+            },
+            {
+              "tcp_streams": [
+                2
+              ]
+            }
+          ],
+          "strict": true
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "workflow": "triage",
+          "layers": [
+            {
+              "path": {
+                "hostsIPv4": [
+                  ""
+                ],
+                "hostsIPv6": [],
+                "protocols": [
+                  "IPv4"
+                ],
+                "rounds": [
+                  "Standard"
+                ],
+                "skipPathping": true
+              },
+              "throughput": {
+                "target": null,
+                "port": 5201,
+                "protocol": "Both",
+                "maxTotalTests": 0
+              }
+            },
+            {
+              "tcp_streams": [
+                2
+              ]
+            }
+          ],
+          "strict": true
+        },
+        "out": "custom-results"
+      }
+    }
+  ],
+  "loaded workflow envelope": [
+    {
+      "name": "plan",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "layers": [
+            {
+              "capability": "workflow",
+              "workflow": "path",
+              "layers": [
+                {
+                  "path": {}
+                }
+              ]
+            }
+          ],
+          "strict": false,
+          "workflow": "path"
+        }
+      }
+    },
+    {
+      "name": "start_run",
+      "args": {
+        "request": {
+          "capability": "workflow",
+          "layers": [
+            {
+              "capability": "workflow",
+              "workflow": "path",
+              "layers": [
+                {
+                  "path": {}
+                }
+              ]
+            }
+          ],
+          "strict": false,
+          "workflow": "path"
+        },
+        "out": "results"
+      }
+    }
+  ],
+  "save configuration": [
+    {
+      "name": "profiles_save_request",
+      "args": {
+        "store": ".iperf3/profiles.json",
+        "name": "Snapshot",
+        "request": {
+          "capability": "workflow",
+          "layers": [
+            {
+              "capability": "workflow",
+              "workflow": "path",
+              "layers": [
+                {
+                  "path": {}
+                }
+              ]
+            }
+          ],
+          "strict": false,
+          "workflow": "path"
+        }
+      }
+    }
+  ]
+}

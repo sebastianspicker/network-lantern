@@ -1,0 +1,21 @@
+{
+  "run_state": [
+    "running",
+    "cancelling",
+    "succeeded",
+    "partial_failure",
+    "failed",
+    "cancelled"
+  ],
+  "error_category": [
+    "validation",
+    "prerequisite",
+    "connectivity",
+    "partial_failure",
+    "total_failure",
+    "internal",
+    "permission",
+    "cancelled",
+    "busy"
+  ]
+}

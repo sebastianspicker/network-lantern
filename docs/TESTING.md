@@ -43,17 +43,31 @@ From Bash, Git Bash, or WSL:
 ./scripts/ci-local.sh
 ```
 
-This is the authoritative pre-completion gate. In order, it runs:
+This is the authoritative pre-completion gate. It runs `scripts/ci-legacy.sh`
+and then `scripts/ci-rust.sh`; either can be run alone while iterating.
 
-1. ShellCheck over the shell entrypoints, wrappers, and Bash path package.
+`scripts/ci-legacy.sh` first checks that `pwsh`, ShellCheck, Bats, `jq`, and
+Node.js 22+ are available, then runs, in order:
+
+1. `make lint`: ShellCheck (`-x`) over every tracked shell script. The
+   `SHELL_SCRIPTS` list in the `Makefile` is the only ShellCheck file list.
 2. The Bash path entrypoint contracts and all Bats tests under `tests/path/bash/`.
 3. Node's built-in test runner over `tests/site/*.test.cjs`.
 4. `scripts/Invoke-SecretScan.ps1`.
-5. `scripts/ci.ps1 -NoInstall`.
+5. `scripts/ci.ps1 -NoInstall`, the only Pester entrypoint.
 
-The PowerShell phase runs the project-identity check, PSScriptAnalyzer, and all
-Pester behavior and architecture suites. It fails if analysis reports an issue, if
-Pester discovers no tests, or if Pester returns a status other than `Passed`.
+`scripts/ci.ps1` runs PSScriptAnalyzer and all Pester behavior and architecture
+suites. It fails if analysis reports an issue, if Pester discovers no tests, or if
+Pester returns a status other than `Passed`.
+
+`scripts/ci-rust.sh` runs the Node architecture tests
+(`tests/architecture/*.test.cjs`), the desktop and Rust checks described under
+[Rust migration gate](#rust-migration-gate), and the whitespace check.
+
+If the complete gate cannot run (for example, `pwsh` is unavailable), run the
+checks that can (`make lint`, `make test-bash`, `scripts/ci-rust.sh`), and name
+every skipped check and the resulting gap when reporting. A PowerShell-only run
+of `scripts/ci.ps1 -NoInstall` is not equivalent to the gate.
 
 By default, the gate installs no operating-system packages and no PowerShell
 modules. Where current-user PowerShell module installation is allowed, run:
@@ -66,7 +80,7 @@ That option installs only the pinned PSScriptAnalyzer and Pester versions.
 
 ## PowerShell and focused checks
 
-Run the PowerShell-only gate without installing dependencies:
+Run the PowerShell phase alone without installing dependencies:
 
 ```powershell
 pwsh -NoProfile -NonInteractive -File .\scripts\ci.ps1 -NoInstall
@@ -79,11 +93,12 @@ temporarily and restores the previous value afterward.
 Run a Pester subset while you iterate:
 
 ```powershell
-pwsh -NoProfile -NonInteractive -File .\scripts\Invoke-Tests.ps1 `
+pwsh -NoProfile -NonInteractive -File .\scripts\ci.ps1 -NoInstall `
   -Filter 'Throughput'
 ```
 
-The filter matches Pester full names and fails when it selects no tests. Useful
+The filter matches Pester full names, skips PSScriptAnalyzer, and fails when it
+selects no tests. Useful
 filters include `Path`, `Throughput`, `Windows tuning`, and `Workflow`. A focused
 run is not equivalent to the complete gate.
 
@@ -188,31 +203,6 @@ contracts. They run without loading Windows Forms on non-Windows hosts.
 
 Do not present these gaps as verified runtime behavior.
 
-## Tooling performance measurements
-
-The optional benchmark uses sanitized files and controlled five-second local
-processes. Before changing either implementation, save baseline copies:
-
-```bash
-mkdir -p artifacts/audit-benchmark/baseline
-cp src/bash/path/lib/runner.sh artifacts/audit-benchmark/baseline/runner.sh
-cp scripts/Invoke-SecretScan.ps1 artifacts/audit-benchmark/baseline/Invoke-SecretScan.ps1
-node scripts/benchmark-tooling.mjs artifacts/audit-benchmark/baseline \
-  > artifacts/audit-benchmark/results.json
-```
-
-It runs one warm-up and ten measured repetitions per implementation, alternating
-order, and reports medians, ranges, sleep and process counts, candidate-file
-traversals, and detection counts. The scanner fixture has 241 files, 1,234,644
-bytes, and 721 expected pattern-line matches. Process counts follow the controlled
-harness's launches, and file-traversal counts follow the scanner loops; neither is
-a system-wide profiler measurement. Generated results stay under `artifacts/`.
-
-The polling acceptance criterion is at least 75% fewer normal sleeps, with an
-unchanged exit status and up to roughly 0.5 seconds of completion or
-signal-response latency plus scheduling tolerance. Keep the scanner change only
-when detections agree and elapsed time does not materially regress.
-
 ## Troubleshooting
 
 - If `scripts/ci.ps1 -NoInstall` reports a missing pinned module, run
@@ -225,12 +215,10 @@ when detections agree and elapsed time does not materially regress.
 
 ## Rust migration gate
 
-The authoritative `scripts/ci-local.sh` composes `scripts/ci-legacy.sh` and
-`scripts/ci-rust.sh`.
-
-The Rust gate requires Rust 1.96.0 and the desktop Node dependencies installed
+`scripts/ci-rust.sh` is the second half of `scripts/ci-local.sh`. It requires Rust 1.96.0 and the desktop Node dependencies installed
 with `npm ci` under `desktop/`. It runs:
 
+- Node architecture tests, including default-host parity across implementations;
 - Rust formatting and Clippy with warnings denied;
 - workspace unit and integration tests;
 - a CLI release build;
@@ -261,8 +249,8 @@ Silicon, and macOS Intel jobs. The macOS deployment target is 13.0; builds use
 supported newer CI hosts. Local macOS checks do not verify Windows native
 providers, Windows recovery, Linux authorization, or remote CI status.
 
-See [the Rust guide](RUST.md) for pure preview commands and the optional
-startup/CPU/RSS benchmark. Interoperability tests are limited to bounded loopback
+See [the Rust guide](RUST.md) for pure preview commands.
+Interoperability tests are limited to bounded loopback
 traffic with development reference servers. Production engines do not invoke
 iperf3, MTR, PowerShell, Bash, or command-line probes.
 

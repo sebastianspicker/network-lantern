@@ -19,15 +19,53 @@ pub enum ErrorCategory {
 }
 impl ErrorCategory {
     pub fn throughput_exit_code(self) -> u8 {
-        match self {
-            Self::Validation => 11,
-            Self::Prerequisite | Self::Permission => 12,
-            Self::Connectivity => 13,
-            Self::PartialFailure => 14,
-            Self::TotalFailure => 15,
-            Self::Internal | Self::Busy => 16,
-            Self::Cancelled => 130,
+        exit::throughput(self)
+    }
+}
+/// Process status policy shared by every adapter. Throughput keeps its legacy status table;
+/// other capabilities collapse failures to [`exit::FAILURE`].
+pub mod exit {
+    use super::ErrorCategory;
+
+    pub const SUCCESS: u8 = 0;
+    pub const FAILURE: u8 = 1;
+    pub const INVALID_INPUT: u8 = 11;
+    pub const PREREQUISITE: u8 = 12;
+    pub const CONNECTIVITY: u8 = 13;
+    pub const PARTIAL_FAILURE: u8 = 14;
+    pub const TOTAL_FAILURE: u8 = 15;
+    pub const INTERNAL: u8 = 16;
+    /// SIGINT or an operator cancellation.
+    pub const CANCELLED: u8 = 130;
+    /// SIGTERM on Unix.
+    pub const TERMINATED: u8 = 143;
+
+    /// The throughput status for a failure category.
+    pub fn throughput(category: ErrorCategory) -> u8 {
+        match category {
+            ErrorCategory::Validation => INVALID_INPUT,
+            ErrorCategory::Prerequisite | ErrorCategory::Permission => PREREQUISITE,
+            ErrorCategory::Connectivity => CONNECTIVITY,
+            ErrorCategory::PartialFailure => PARTIAL_FAILURE,
+            ErrorCategory::TotalFailure => TOTAL_FAILURE,
+            ErrorCategory::Internal | ErrorCategory::Busy => INTERNAL,
+            ErrorCategory::Cancelled => CANCELLED,
         }
+    }
+    pub fn is_interrupted(code: u8) -> bool {
+        matches!(code, CANCELLED | TERMINATED)
+    }
+    /// Maps a throughput-table status to the process status of the executed capability.
+    pub fn for_capability(throughput: bool, code: u8) -> u8 {
+        if throughput || code == SUCCESS || is_interrupted(code) {
+            code
+        } else {
+            FAILURE
+        }
+    }
+    /// The process status for an error returned before or instead of a run summary.
+    pub fn for_error(throughput: bool, category: ErrorCategory) -> u8 {
+        for_capability(throughput, self::throughput(category))
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
@@ -89,5 +127,15 @@ mod tests {
     fn diagnostics_are_utf8_bounded() {
         let s = "é".repeat(9000);
         assert_eq!(bounded_text(&s, 16383).len(), 16382);
+    }
+    #[test]
+    fn process_status_policy() {
+        assert_eq!(exit::for_error(true, ErrorCategory::Validation), 11);
+        assert_eq!(exit::for_error(false, ErrorCategory::Validation), 1);
+        assert_eq!(exit::for_error(true, ErrorCategory::Busy), 16);
+        assert_eq!(exit::for_error(false, ErrorCategory::Cancelled), 130);
+        assert_eq!(exit::for_capability(false, 14), 1);
+        assert_eq!(exit::for_capability(false, 143), 143);
+        assert_eq!(exit::for_capability(true, 15), 15);
     }
 }

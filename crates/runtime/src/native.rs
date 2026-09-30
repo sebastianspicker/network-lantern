@@ -1,5 +1,5 @@
 //! Selects the authorized native helper once per run. Planning never enters this module.
-use crate::application::{helper_error, throughput_error};
+use crate::errors::{helper_error, probe_error, throughput_error};
 use lantern_contracts::{Error, ErrorCategory, Result};
 use lantern_helper::{HelperClient, HelperOperation};
 use tokio_util::sync::CancellationToken;
@@ -152,16 +152,4 @@ impl NativeExecution {
                 .map_err(probe_error)
         }
     }
-}
-
-fn probe_error(error: lantern_path_io::ProbeError) -> Error {
-    use lantern_path_io::ProbeError as P;
-    let category = match &error {
-        P::Cancelled => ErrorCategory::Cancelled,
-        P::Permission { .. } => ErrorCategory::Permission,
-        P::Unsupported { .. } => ErrorCategory::Prerequisite,
-        P::InvalidHost(_) | P::InvalidPlan(_) => ErrorCategory::Validation,
-        _ => ErrorCategory::Connectivity,
-    };
-    Error::new(category, error.to_string())
 }

@@ -5,8 +5,8 @@ but compatibility changes still need to be deliberate, tested, and documented.
 
 ## Set up
 
-Keep the source checkout layout intact. The full toolchain is PowerShell 7, Git,
-Bash 4+, ShellCheck, Bats, `jq`, PSScriptAnalyzer 1.24.0, and Pester 5.7.1.
+Keep the source checkout layout intact. The toolchain and its pinned versions are
+listed in [docs/TESTING.md](docs/TESTING.md#toolchain).
 
 Check what is already available, without installing anything:
 

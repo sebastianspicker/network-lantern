@@ -2,8 +2,7 @@
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT"
-shellcheck scripts/ci-rust.sh scripts/prepare-macos-app.sh
-node --test tests/architecture/rust-boundaries.test.cjs
+node --test tests/architecture/*.test.cjs
 npm --prefix desktop run check
 npm --prefix desktop test
 npm --prefix desktop run build

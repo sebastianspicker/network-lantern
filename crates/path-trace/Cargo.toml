@@ -9,7 +9,6 @@ lantern-packet = { path = "../packet" }
 lantern-path-io = { path = "../path-io" }
 serde.workspace = true
 rand.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 

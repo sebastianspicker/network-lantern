@@ -18,7 +18,6 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-libc.workspace = true
 csv.workspace = true
 [dev-dependencies]
 tempfile.workspace = true

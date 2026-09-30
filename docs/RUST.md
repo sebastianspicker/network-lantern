@@ -142,19 +142,6 @@ TypeScript, and frontend tests. The separate Rust CI workflow configures Windows
 Ubuntu 22.04, and both macOS architectures. Its configured jobs are not proof that
 remote CI has passed.
 
-`python3 scripts/benchmark-rust.py` runs one warm-up and ten alternating measured
-preview repetitions against the preserved PowerShell implementation, recording
-wall time, process CPU, and peak RSS on macOS.
-
-`scripts/benchmark-data.py` measures report comparison and development-only
-allocation counts, and `scripts/benchmark-cancellation.py` compares cancellation
-after an identical 37-byte loopback iperf control exchange. Each uses one warm-up
-and ten measured repetitions.
-
-Results describe orchestration costs, not maximum network throughput. The macOS
-`time` command rounds CPU times to hundredths of a second, so a zero in those
-samples means the value is below its display resolution.
-
 ## Desktop and authorization
 
 ```sh

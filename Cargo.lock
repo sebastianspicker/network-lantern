@@ -2070,7 +2070,6 @@ name = "lantern-helper"
 version = "0.1.0"
 dependencies = [
  "block2",
- "chrono",
  "hmac",
  "lantern-contracts",
  "lantern-path-basic",
@@ -2136,7 +2135,6 @@ dependencies = [
  "lantern-path-io",
  "rand",
  "serde",
- "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "windows-sys 0.61.2",
@@ -2168,7 +2166,6 @@ dependencies = [
  "lantern-platform",
  "lantern-throughput",
  "lantern-tuning",
- "libc",
  "serde",
  "serde_json",
  "tempfile",

@@ -12,7 +12,6 @@ lantern-path-basic = { path = "../path-basic" }
 lantern-path-trace = { path = "../path-trace" }
 lantern-throughput = { path = "../throughput" }
 lantern-tuning = { path = "../tuning" }
-chrono.workspace = true
 hmac = "0.12.1"
 rand.workspace = true
 serde.workspace = true

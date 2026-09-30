@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand};
-use lantern_contracts::{Error, ErrorCategory, Result};
+use lantern_contracts::{Error, ErrorCategory, Result, exit};
 use lantern_platform::{PROFILE_LIMIT, read_json};
 use lantern_runtime::{profiles::ProfileStore, reports};
 use serde_json::{Value, json};
@@ -164,11 +164,6 @@ enum HelperCommand {
 #[tokio::main]
 async fn main() -> ExitCode {
     let arguments = std::env::args().collect::<Vec<_>>();
-    let throughput = arguments
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with('-'))
-        .is_some_and(|a| a == "throughput");
     let cli = match Cli::try_parse_from(&arguments) {
         Ok(cli) => cli,
         Err(error) => {
@@ -179,23 +174,24 @@ async fn main() -> ExitCode {
                 let _ = error.print();
                 return ExitCode::SUCCESS;
             }
+            // Parsing failed, so only the raw arguments can identify the throughput command.
+            let throughput = arguments
+                .iter()
+                .skip(1)
+                .find(|a| !a.starts_with('-'))
+                .is_some_and(|a| a == "throughput");
             emit(&json!({"error":Error::validation(error.to_string())}), true);
-            return ExitCode::from(if throughput { 11 } else { 1 });
+            return ExitCode::from(exit::for_error(throughput, ErrorCategory::Validation));
         }
     };
     let compact = cli.json;
+    let throughput = matches!(cli.command, Command::Throughput(_));
     let (value, code) = match dispatch(cli.command).await {
         Ok(result) => result,
-        Err(error) => {
-            let code = if error.category == ErrorCategory::Cancelled {
-                130
-            } else if throughput {
-                error.category.throughput_exit_code()
-            } else {
-                1
-            };
-            (json!({"error":error}), code)
-        }
+        Err(error) => (
+            json!({"error":error}),
+            exit::for_error(throughput, error.category),
+        ),
     };
     emit(&value, compact);
     ExitCode::from(code)
@@ -293,7 +289,7 @@ async fn dispatch(command: Command) -> Result<(Value, u8)> {
             }
         },
     };
-    Ok((value, 0))
+    Ok((value, exit::SUCCESS))
 }
 fn parse_settings(text: &str) -> Result<Value> {
     if text.len() > PROFILE_LIMIT {
@@ -346,19 +342,19 @@ async fn measurement(
     let request = lantern_runtime::prepare_local_request(&request)?;
     let plan = lantern_runtime::plan_request(&request)?;
     if options.dry_run {
-        return Ok((plan, 0));
+        return Ok((plan, exit::SUCCESS));
     }
     let manager = lantern_runtime::manager::RunManager::default();
     let cancel = tokio_util::sync::CancellationToken::new();
     let signal_cancel = cancel.clone();
-    let code = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(130));
+    let code = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(exit::CANCELLED));
     let signal_code = code.clone();
     #[cfg(unix)]
     let signal = tokio::spawn(async move {
         use tokio::signal::unix::{SignalKind, signal};
         let mut interrupt = signal(SignalKind::interrupt()).expect("SIGINT handler");
         let mut terminate = signal(SignalKind::terminate()).expect("SIGTERM handler");
-        tokio::select! {_=interrupt.recv()=>(),_=terminate.recv()=>signal_code.store(143,std::sync::atomic::Ordering::SeqCst)};
+        tokio::select! {_=interrupt.recv()=>(),_=terminate.recv()=>signal_code.store(exit::TERMINATED,std::sync::atomic::Ordering::SeqCst)};
         signal_cancel.cancel();
     });
     #[cfg(not(unix))]

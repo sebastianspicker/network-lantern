@@ -80,7 +80,7 @@ Every PowerShell entrypoint requires PowerShell 7.
 | Throughput GUI | Windows Forms on Windows |
 | Windows tuning verification | Windows networking cmdlets, including `Get-NetQosPolicy` |
 | Windows tuning mutation | Windows, elevation, and an independent recovery method |
-| Complete development gate | Git, Rust 1.96.0, Node.js 22+, desktop npm dependencies, ShellCheck, Bats, `jq`, PSScriptAnalyzer 1.24.0, and Pester 5.7.1; see the [native desktop prerequisites](docs/TESTING.md#rust-migration-gate) |
+| Complete development gate | See the [toolchain](docs/TESTING.md#toolchain) and [native desktop prerequisites](docs/TESTING.md#rust-migration-gate) |
 
 Inspect your environment without installing anything:
 
@@ -216,10 +216,8 @@ The authoritative gate is:
 ./scripts/ci-local.sh
 ```
 
-It runs ShellCheck, Bats, the secret-pattern and project-identity checks,
-PSScriptAnalyzer, and every Pester suite, then the Rust and desktop checks. It
-uses controlled fakes and dry-run paths rather than live probes or Windows
-mutation.
+It uses controlled fakes and dry-run paths rather than live probes or Windows
+mutation; [docs/TESTING.md](docs/TESTING.md#the-complete-gate) lists its steps.
 
 Narrower checks while iterating:
 

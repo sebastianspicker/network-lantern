@@ -13,7 +13,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Keep module version pins in sync with $requiredModules in scripts/ci.ps1.
+# The module pins are owned by $requiredModules in scripts/ci.ps1 (and mirrored in
+# scripts/Test-Prerequisites.ps1). Keep the cache key below in sync with them.
 # PSScriptAnalyzer: 1.24.0  |  Pester: 5.7.1
 # Update the cache key suffix below whenever these versions change.
 

@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 test('seven flows remain usable without a native bridge',async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto('/');await expect(page).toHaveTitle('Network Lantern');await expect(page.getByRole('heading',{level:1})).toBeVisible();
@@ -45,6 +46,7 @@ async function useNativeFixture(page: import('@playwright/test').Page) {
       if(name==='runs_list')return {runs:fixture.empty?[]:[{path:'fixture.json',summary:{status:'partial',total:25}}],total:fixture.empty?0:1,has_more:false,legacy_index:fixture.legacyError?{path:'results/runs.json',error:{category:'parse',message:'Invalid legacy index'}}:null};
       if(name==='report_read'){if(args.path==='missing.json')throw {category:'io',message:'Report not found'};return {metadata:{status:'partial',source_schema:'fixture',provenance:{engine:'test'}},rows:fixture.empty?[]:Array.from({length:args.offset===0?20:5},(_,n)=>({record:args.offset+n})),offset:args.offset,next_offset:fixture.empty?0:args.offset===0?20:25,total:fixture.empty?0:25,has_more:!fixture.empty&&args.offset===0};}
       if(name==='report_compare')return {failed_delta:null};
+      if(name==='start_run')return;
       throw Error('Unexpected fixture command: '+name);
     }});
   });
@@ -298,4 +300,136 @@ test('unreadable legacy indexes warn while valid native runs remain available', 
   await expect(page.locator('#reports-status')).toHaveText('Runs loaded. Legacy index results/runs.json: parse: Invalid legacy index');
   await page.locator('[data-report]').click();
   await expect(page.locator('#report-detail')).toBeVisible();
+});
+
+// Characterization contracts: set UPDATE_CONTRACTS=1 to regenerate the checked-in snapshots.
+function matchContract(name: string, actual: unknown) {
+  const file = new URL(`fixtures/${name}.json`, import.meta.url);
+  if (process.env.UPDATE_CONTRACTS === '1') {
+    mkdirSync(new URL('fixtures/', import.meta.url), { recursive: true });
+    writeFileSync(file, JSON.stringify(actual, null, 2) + '\n');
+  }
+  expect(actual).toEqual(JSON.parse(readFileSync(file, 'utf8')));
+}
+async function domAttributes(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const entries = new Set<string>();
+    for (const element of document.body.querySelectorAll('*')) {
+      const attributes = [...element.attributes]
+        .filter(({ name }) => ['id', 'role', 'hidden'].includes(name) || name.startsWith('aria-') || name.startsWith('data-'))
+        .map(({ name, value }) => `${name}=${JSON.stringify(value)}`)
+        .sort();
+      if (attributes.length) entries.add(`${element.tagName.toLowerCase()} ${attributes.join(' ')}`);
+    }
+    return [...entries].sort();
+  });
+}
+const contractFlows = ['triage', 'path', 'throughput', 'baseline', 'windows_tuning', 'profiles', 'reports'];
+
+test('DOM contract of every flow matches the characterized interface', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#environment')).toHaveText('Runtime unavailable');
+  const contract: Record<string, unknown> = { markup: await page.locator('#app').evaluate(app => app.innerHTML) };
+  for (const flow of contractFlows) {
+    await page.locator(`[data-flow="${flow}"]`).click();
+    await expect(page.locator(`[data-flow="${flow}"]`)).toHaveAttribute('aria-current', 'page');
+    contract[flow] = await domAttributes(page);
+  }
+  await useNativeFixture(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    (window as any).fixture.state = 'idle';
+    (window as any).fixture.profiles = { 'Alpha <&>': { host: 'alpha.example' }, Beta: { host: 'beta.example' } };
+  });
+  await expect(page.locator('#run-strip')).toBeHidden();
+  await page.locator('#preview').click();
+  await expect(page.locator('#plan-summary')).toContainText('planned items');
+  contract.planSummary = await page.locator('#plan-summary').evaluate(node => node.innerHTML);
+  await page.locator('[data-flow="profiles"]').click();
+  await expect(page.locator('#profile-list')).toContainText('Beta');
+  contract.profileList = await page.locator('#profile-list').evaluate(node => node.innerHTML);
+  await page.locator('[data-flow="reports"]').click();
+  await expect(page.locator('#run-list')).toContainText('partial');
+  await page.locator('[data-report]').click();
+  await expect(page.locator('#rows-page')).toHaveText('0–20 of 25');
+  contract.runList = await page.locator('#run-list').evaluate(node => node.innerHTML);
+  contract.reportMetadata = await page.locator('#report-metadata').evaluate(node => node.innerHTML);
+  contract.reportsWithDetail = await domAttributes(page);
+  matchContract('dom-contract', contract);
+});
+
+test('plan and start requests match the characterized payloads', async ({ page }) => {
+  test.setTimeout(60000);
+  await useNativeFixture(page);
+  type Configure = (page: import('@playwright/test').Page) => Promise<void>;
+  const unchanged: Configure = async () => {};
+  const cases: [string, string, Configure][] = [
+    ['triage', 'triage', unchanged],
+    ['path', 'path', unchanged],
+    ['throughput', 'throughput', unchanged],
+    ['baseline', 'baseline', unchanged],
+    ['windows_tuning', 'windows_tuning', unchanged],
+    ['path trace IPv6 TCP', 'path', async page => {
+      await page.locator('#host').fill('trace.example');
+      await page.locator('#engine').selectOption('path_trace');
+      await page.locator('#family').selectOption('IPv6');
+      await page.locator('#trace-type').selectOption('TCP6');
+      await page.locator('#round').selectOption('TTL10');
+    }],
+    ['throughput UDP custom port', 'throughput', async page => {
+      await page.locator('#target').fill(' iperf.example ');
+      await page.locator('#protocol').selectOption('UDP');
+      await page.locator('#port').fill('5300');
+      await page.locator('#max-tests').fill('4');
+    }],
+    ['tuning backup measured', 'windows_tuning', async page => {
+      await page.locator('#action').selectOption('Backup');
+      await page.locator('#tuning-profile').selectOption('Measured');
+      await page.locator('#udp-port').fill('5202');
+      await page.locator('#dscp').fill('34');
+      await page.locator('#backup-folder').fill(' C:\\Backups ');
+      await page.locator('#power-plan').selectOption('HighPerformance');
+      await page.locator('#app-policies').check();
+      await page.locator('#app-paths').fill('C:\\a.exe\n\n  C:\\b.exe  ');
+    }],
+    ['triage strict override', 'triage', async page => {
+      await page.locator('.advanced summary').click();
+      await page.locator('#advanced').fill('{"tcp_streams":[2]}');
+      await page.locator('#strict').check();
+      await page.locator('#skip').check();
+      await page.locator('#out').fill('custom-results');
+    }],
+  ];
+  const requests: Record<string, unknown> = {};
+  const recorded = (names: string[]) => page.evaluate(names => (window as any).fixture.calls
+    .filter((item: any) => names.includes(item.name)), names);
+  for (const [label, flow, configure] of cases) {
+    await page.goto('/');
+    await page.evaluate(() => { (window as any).fixture.state = 'idle'; });
+    await page.locator(`[data-flow="${flow}"]`).click();
+    await configure(page);
+    await page.locator('#preview').click();
+    await expect(page.locator('#start')).toBeEnabled();
+    await page.locator('#start').click();
+    await expect(page.locator('#plan-state')).toHaveText('Settings changed. Review a fresh plan before starting.');
+    requests[label] = await recorded(['plan', 'start_run']);
+  }
+  await page.goto('/');
+  await page.evaluate(() => { (window as any).fixture.state = 'idle'; });
+  await page.locator('[data-flow="profiles"]').click();
+  await page.locator('#profile-json').fill('{"capability":"workflow","workflow":"path","layers":[{"path":{}}]}');
+  await page.locator('#use-profile').click();
+  await expect(page.locator('[data-flow="path"]')).toHaveAttribute('aria-current', 'page');
+  await page.locator('#preview').click();
+  await expect(page.locator('#start')).toBeEnabled();
+  await page.locator('#start').click();
+  await expect(page.locator('#plan-state')).toHaveText('Settings changed. Review a fresh plan before starting.');
+  requests['loaded workflow envelope'] = await recorded(['plan', 'start_run']);
+  await page.locator('#host').fill('saved.example');
+  await page.locator('#save-config').click();
+  await page.locator('#profile-name').fill('Snapshot');
+  await page.locator('#profile-form button[type="submit"]').click();
+  await expect(page.locator('#profiles-status')).toHaveText('Saved profile "Snapshot".');
+  requests['save configuration'] = await recorded(['profiles_save_request']);
+  matchContract('requests', requests);
 });

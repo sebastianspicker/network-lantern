@@ -29,6 +29,8 @@ jobs:
       - name: Linux desktop prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf iperf3 xvfb
+      - name: Architecture boundary tests
+        run: node --test tests/architecture/*.test.cjs
       - name: Desktop dependencies
         working-directory: desktop
         run: npm ci

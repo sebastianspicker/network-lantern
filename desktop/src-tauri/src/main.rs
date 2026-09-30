@@ -130,12 +130,7 @@ async fn helper_change(operation: &str, state: &AppState) -> Result<Value> {
     if state.shutting_down.load(Ordering::Acquire) {
         return Err(busy());
     }
-    if state.runs.snapshot().is_some_and(|p| {
-        matches!(
-            p.state,
-            runtime::manager::RunState::Running | runtime::manager::RunState::Cancelling
-        )
-    }) {
+    if state.runs.snapshot().is_some_and(|p| p.state.is_active()) {
         return Err(busy());
     }
     runtime::helper_operation(operation).await
@@ -190,22 +185,18 @@ fn main() {
     });
 }
 fn measurement_active(manager: &RunManager) -> bool {
-    manager.snapshot().is_some_and(|progress| {
-        matches!(
-            progress.state,
-            runtime::manager::RunState::Running | runtime::manager::RunState::Cancelling
-        )
-    })
+    manager
+        .snapshot()
+        .is_some_and(|progress| progress.state.is_active())
 }
 async fn await_measurement_cleanup(manager: &RunManager, deadline: std::time::Duration) -> bool {
     let mut updates = manager.subscribe();
     tokio::time::timeout(deadline, async {
-        while updates.borrow().as_ref().is_some_and(|progress| {
-            matches!(
-                progress.state,
-                runtime::manager::RunState::Running | runtime::manager::RunState::Cancelling
-            )
-        }) {
+        while updates
+            .borrow()
+            .as_ref()
+            .is_some_and(|progress| progress.state.is_active())
+        {
             if updates.changed().await.is_err() {
                 break;
             }
@@ -244,7 +235,7 @@ mod tests {
         assert!(run.cancel.is_cancelled());
         assert!(!await_measurement_cleanup(&manager, std::time::Duration::from_millis(5)).await);
         assert!(measurement_active(&manager));
-        run.finish(130, None);
+        run.finish(lantern_contracts::exit::CANCELLED, None);
         assert!(await_measurement_cleanup(&manager, std::time::Duration::from_millis(5)).await);
         assert!(!measurement_active(&manager));
     }

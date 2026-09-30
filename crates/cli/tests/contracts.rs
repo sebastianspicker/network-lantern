@@ -166,3 +166,68 @@ fn saved_workflow_selects_identity_when_cli_name_is_omitted() {
     assert_eq!(value["workflow"], "baseline");
     assert_eq!(value["steps"][1]["plan"]["total_tests"], 1);
 }
+
+#[test]
+fn parse_errors_use_the_throughput_or_general_failure_status() {
+    for (args, code) in [
+        (vec!["throughput", "--bogus"], 11),
+        (vec!["--json", "throughput", "--bogus"], 11),
+        (vec!["throughput", "--port", "not-a-port"], 11),
+        (vec!["path", "basic", "--bogus"], 1),
+        (vec!["workflow", "--bogus"], 1),
+        (vec!["bogus"], 1),
+        (vec![], 1),
+    ] {
+        let result = cli(&args);
+        assert_eq!(result.status.code(), Some(code), "{args:?}");
+        let value: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "validation", "{args:?}");
+    }
+}
+
+#[test]
+fn help_and_version_exit_zero() {
+    for args in [
+        vec!["--help"],
+        vec!["--version"],
+        vec!["throughput", "--help"],
+    ] {
+        assert_eq!(cli(&args).status.code(), Some(0), "{args:?}");
+    }
+}
+
+#[test]
+fn validation_failures_use_capability_specific_status() {
+    for (args, code) in [
+        (
+            vec![
+                "throughput",
+                "--target",
+                "fixture.invalid",
+                "--settings",
+                "[]",
+                "--dry-run",
+                "--json",
+            ],
+            11,
+        ),
+        (
+            vec![
+                "workflow",
+                "baseline",
+                "--settings",
+                "[]",
+                "--dry-run",
+                "--json",
+            ],
+            1,
+        ),
+        (vec!["tuning", "--settings", "[]", "--dry-run", "--json"], 1),
+        (vec!["runs", "list", "--limit", "0", "--json"], 1),
+    ] {
+        let result = cli(&args);
+        assert_eq!(result.status.code(), Some(code), "{args:?}");
+        let value: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(value["error"]["category"], "validation", "{args:?}");
+    }
+}

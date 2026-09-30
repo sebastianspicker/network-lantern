@@ -159,9 +159,117 @@ pub fn validate_parameters(parameters: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A version 1 profile envelope holding the fully resolved parameters of a request.
+pub fn profile_parameters(value: &Value) -> Result<Value> {
+    let preview = crate::plan_request(value)?;
+    fn direct(preview: &Value) -> Value {
+        if preview["capability"] == "throughput" {
+            let mut parameters = preview["plan"]["config"].clone();
+            parameters["bidirectional"] = preview["plan"]["capabilities"]["bidirectional"].clone();
+            if let Some(thresholds) = preview["thresholds"].as_object() {
+                for (k, v) in thresholds {
+                    parameters[k] = v.clone();
+                }
+            }
+            parameters
+        } else {
+            preview["settings"].clone()
+        }
+    }
+    if preview["capability"] != "workflow" {
+        return Ok(
+            json!({"schema_version":1,"capability":preview["capability"],"parameters":direct(&preview)}),
+        );
+    }
+    let mut parameters = json!({});
+    for step in preview["steps"].as_array().unwrap() {
+        let resolved = direct(step);
+        if step["capability"] == "path_basic" {
+            parameters["path"] = resolved;
+        } else if step["capability"] == "throughput" {
+            parameters["throughput"] = resolved;
+            if parameters["throughput"]["max_total_tests"].is_null() {
+                parameters["throughput"]["max_total_tests"] = json!(0);
+            }
+        } else if step["capability"] == "tuning" {
+            parameters["windowsTuning"] = resolved;
+        } else {
+            return Err(Error::validation("Unknown workflow capability"));
+        }
+    }
+    Ok(
+        json!({"schema_version":1,"capability":"workflow","workflow":preview["workflow"],"parameters":parameters}),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan_request;
+    #[test]
+    fn resolved_profiles_round_trip_without_losing_nested_overrides() {
+        for request in [
+            json!({"capability":"throughput","layers":[
+                {"target":"fixture.invalid","duration_secs":2,"single_test":true,"bidirectional":false},
+                {"omit_secs":0,"max_loss_pct":2.5}
+            ]}),
+            json!({"capability":"path_trace","layers":[{"hosts_ipv4":["fixture.invalid"],"types":["TCP4"]}]}),
+            json!({"capability":"workflow","workflow":"baseline","layers":[
+                {"throughput":{"target":"fixture.invalid","port":5003,"duration_secs":3,"omit_secs":0},
+                    "path":{"skipPathping":true,"max_hops":4}},
+                {"throughput":{"protocol":"TCP"}}
+            ]}),
+        ] {
+            let before = plan_request(&request).unwrap();
+            let envelope = profile_parameters(&request).unwrap();
+            validate_parameters(&envelope).unwrap();
+            let after = plan_request(&json!({
+                "capability":request["capability"],"workflow":request.get("workflow"),
+                "layers":[envelope],"strict":true
+            }))
+            .unwrap();
+            // Explicit resolved defaults can remove a warning, but execution plans must match.
+            assert_eq!(before["plan"], after["plan"]);
+            assert_eq!(before["settings"], after["settings"]);
+            assert_eq!(before["steps"], after["steps"]);
+        }
+    }
+    #[test]
+    fn single_family_path_targets_survive_resolved_settings_and_profile_storage() {
+        let directory =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let store = ProfileStore {
+            path: directory.path().join("profiles.json"),
+        };
+        for capability in ["path_basic", "path_trace"] {
+            for (target, excluded) in [("192.0.2.1", "hosts_ipv6"), ("2001:db8::1", "hosts_ipv4")] {
+                let request = json!({"capability":capability,"layers":[{"target":target}]});
+                let preview = plan_request(&request).unwrap();
+                assert_eq!(preview["settings"][excluded], json!([]));
+                assert_eq!(
+                    crate::application::count(&preview),
+                    if capability == "path_basic" { 1 } else { 2 }
+                );
+
+                // The desktop executes the resolved settings from its reviewed preview.
+                let replanned = plan_request(&json!({
+                    "capability":capability,"layers":[preview["settings"]],"strict":true
+                }))
+                .unwrap();
+                assert_eq!(preview["plan"], replanned["plan"]);
+                assert_eq!(preview["settings"], replanned["settings"]);
+
+                let envelope = profile_parameters(&request).unwrap();
+                store.save("single-target", &envelope).unwrap();
+                let loaded = store.get("single-target").unwrap();
+                let restored = plan_request(&json!({
+                    "capability":capability,"layers":[loaded],"strict":true
+                }))
+                .unwrap();
+                assert_eq!(preview["plan"], restored["plan"]);
+                assert_eq!(preview["settings"], restored["settings"]);
+            }
+        }
+    }
     #[test]
     fn legacy_store_preserves_unknown_fields_and_other_profiles() {
         let dir =

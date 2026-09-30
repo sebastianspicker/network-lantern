@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-  [switch]$NoInstall
+  [switch]$NoInstall,
+  # Substring of a Pester Describe/Context/It full name. Runs that Pester subset only
+  # (skips static analysis) and fails when it selects no tests.
+  [string]$Filter
 )
 
 Set-StrictMode -Version Latest
@@ -11,8 +14,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Write-Information "PowerShell version: $($PSVersionTable.PSVersion)" -InformationAction Continue
 Write-Information "PSModulePath: $env:PSModulePath" -InformationAction Continue
 
-# Keep module version pins in sync with the cache-key comment in .github/workflows/ci.yml.
-# Update both files when bumping either version.
+# Keep module version pins in sync with scripts/Test-Prerequisites.ps1 and the
+# cache-key comment in .github/workflows/ci.yml. Update all three when bumping either version.
 $requiredModules = @{
   PSScriptAnalyzer = '1.24.0'
   Pester           = '5.7.1'
@@ -119,15 +122,17 @@ $pathsToAnalyze = @(
   (Join-Path $repoRoot 'Invoke-NetworkLantern.ps1')
 )
 
-& (Join-Path $repoRoot 'scripts/Test-BrandIdentity.ps1') -RepoRoot $repoRoot
-
 $settingsPath = Join-Path $repoRoot 'PSScriptAnalyzerSettings.psd1'
-$scriptAnalyzerResults = foreach ($path in $pathsToAnalyze) {
-  Invoke-ScriptAnalyzer -Path $path -Recurse -Settings $settingsPath
-}
-if ($scriptAnalyzerResults) {
-  $scriptAnalyzerResults | Sort-Object ScriptName, Line | Format-Table -AutoSize | Out-String | Write-Output
-  throw "PSScriptAnalyzer found $(@($scriptAnalyzerResults).Count) issue(s)."
+if ($Filter) {
+  Write-Warning 'ci.ps1 -Filter runs a filtered Pester subset only. Run scripts/ci.ps1 without -Filter or ./scripts/ci-local.sh for the full verification gate.'
+} else {
+  $scriptAnalyzerResults = foreach ($path in $pathsToAnalyze) {
+    Invoke-ScriptAnalyzer -Path $path -Recurse -Settings $settingsPath
+  }
+  if ($scriptAnalyzerResults) {
+    $scriptAnalyzerResults | Sort-Object ScriptName, Line | Format-Table -AutoSize | Out-String | Write-Output
+    throw "PSScriptAnalyzer found $(@($scriptAnalyzerResults).Count) issue(s)."
+  }
 }
 
 $pesterConfiguration = [PesterConfiguration]::Default
@@ -136,12 +141,18 @@ $pesterConfiguration.Run.Exit = $false
 $pesterConfiguration.Run.PassThru = $true
 $pesterConfiguration.Output.Verbosity = 'Detailed'
 $pesterConfiguration.Should.ErrorAction = 'Stop'
+if ($Filter) {
+  $pesterConfiguration.Filter.FullName = "*$Filter*"
+}
 
 $pesterResult = Invoke-Pester -Configuration $pesterConfiguration
 if (-not $pesterResult) {
   throw 'Pester did not return a result object.'
 }
 if (($pesterResult.TotalCount - $pesterResult.NotRunCount) -eq 0) {
+  if ($Filter) {
+    throw "No tests matched filter '$Filter'."
+  }
   throw 'Pester did not discover any tests.'
 }
 if ($pesterResult.Result -ne 'Passed') {

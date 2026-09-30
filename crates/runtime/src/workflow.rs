@@ -1,4 +1,5 @@
 //! Pure ordered workflow resolution. Execution and filesystem paths belong to the runtime.
+use crate::application::Capability;
 use lantern_contracts::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -223,6 +224,59 @@ fn choice(value: &Value, name: &str, allowed: &[&str]) -> Result<()> {
     } else {
         Err(Error::validation(format!("Invalid {name}")))
     }
+}
+/// Merges nested objects from `source` into `target`; other values replace.
+pub(crate) fn deep_merge(target: &mut Value, source: &Value) {
+    if let (Some(target), Some(source)) = (target.as_object_mut(), source.as_object()) {
+        for (k, v) in source {
+            if v.is_object() {
+                let entry = target.entry(k).or_insert_with(|| json!({}));
+                deep_merge(entry, v);
+            } else {
+                target.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+/// Moves flat throughput overrides into the workflow's `throughput` section.
+pub(crate) fn workflow_layer(layer: &Value) -> Result<Value> {
+    let mut value = layer.clone();
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| Error::validation("Workflow settings must be an object"))?;
+    for (from, to) in [
+        ("target", "target"),
+        ("port", "port"),
+        ("protocol", "protocol"),
+        ("max_total_tests", "maxTotalTests"),
+        ("duration_secs", "duration_secs"),
+        ("omit_secs", "omit_secs"),
+        ("single_test", "single_test"),
+        ("bidirectional", "bidirectional"),
+    ] {
+        if let Some(v) = object.remove(from) {
+            let throughput = object
+                .entry("throughput")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    Error::validation(
+                        "Workflow section 'throughput' must be an object when applying overrides",
+                    )
+                })?;
+            throughput.insert(to.into(), v);
+        }
+    }
+    Ok(value)
+}
+/// The capability request that plans one resolved workflow step.
+pub(crate) fn step_request(step: &Step, strict: bool) -> Value {
+    let (capability, layer) = match step {
+        Step::Path(v) => (Capability::PathBasic, v),
+        Step::Throughput(v) => (Capability::Throughput, v),
+        Step::WindowsTuning(v) => (Capability::Tuning, v),
+    };
+    json!({"capability":capability.as_str(),"layers":[layer],"strict":strict})
 }
 #[cfg(test)]
 mod tests {
