@@ -1,0 +1,112 @@
+name: Rust migration
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions: {}
+jobs:
+  native:
+    name: Rust and desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-15-intel, macos-15]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Linux desktop prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf iperf3 xvfb
+      - name: Desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Desktop checks
+        working-directory: desktop
+        run: npm run check
+      - name: Desktop tests
+        working-directory: desktop
+        run: npm test
+      - name: Desktop build
+        working-directory: desktop
+        run: npm run build
+      - name: Browser engine
+        working-directory: desktop
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        working-directory: desktop
+        run: npm run test:browser
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: cargo test --workspace --locked
+      - name: CLI release build
+        run: cargo build --release --locked -p network-lantern
+      - name: CLI pure preview
+        run: cargo run --locked -p network-lantern -- throughput --target fixture.invalid --dry-run --json
+      - name: Native test build
+        working-directory: desktop
+        run: npm run build:e2e
+      - name: Native desktop tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm --prefix desktop run test:native
+      - name: Native desktop tests (Windows and macOS)
+        if: runner.os != 'Linux'
+        run: npm --prefix desktop run test:native
+      - name: Restore production assets
+        working-directory: desktop
+        run: npm run build
+      - name: Native host build
+        run: cargo build --release --locked -p network-lantern-desktop -p lantern-helper
+      - name: Secret scan
+        shell: pwsh
+        run: ./scripts/Invoke-SecretScan.ps1
+  iperf-interoperability:
+    name: Native iperf3 interoperability (${{ matrix.version }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '3.7'
+            sha256: d846040224317caf2f75c843d309a950a7db23f9b44b94688ccbe557d6d1710c
+          - version: '3.21'
+            sha256: 656e4405ebd620121de7ceca3eaf43a88f79ea1b857d041a6a0b1314801acdd8
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Build verified development reference
+        env:
+          IPERF_REFERENCE_VERSION: ${{ matrix.version }}
+          IPERF_REFERENCE_SHA256: ${{ matrix.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/iperf-reference
+          curl --fail --location --output target/iperf-reference.tar.gz "https://downloads.es.net/pub/iperf/iperf-${IPERF_REFERENCE_VERSION}.tar.gz"
+          printf '%s  %s\n' "$IPERF_REFERENCE_SHA256" target/iperf-reference.tar.gz | sha256sum --check --strict
+          tar -xzf target/iperf-reference.tar.gz --strip-components=1 -C target/iperf-reference
+          cd target/iperf-reference
+          ./configure --disable-shared
+          make -j2
+      - name: Bounded loopback interoperability
+        env:
+          NETWORK_LANTERN_IPERF3_ORACLE: ${{ github.workspace }}/target/iperf-reference/src/iperf3
+        run: cargo test -p lantern-throughput --test iperf3_loopback --locked -- --ignored --test-threads=1

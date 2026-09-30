@@ -12,6 +12,7 @@ $script:DefaultNetworkThroughputParams = @{
   DscpClasses = @('CS0', 'AF11', 'CS5', 'EF', 'AF41'); IpVersion = 'Auto'
   ProfileName = $null; ProfilesFile = $null; SaveProfile = $false; ListProfiles = $false
   StrictConfiguration = $false; PassThru = $false; RetryCount = 0
+  MaxTotalTests = 0
   ThresholdMinThroughputMbps = $null; ThresholdMaxLossPct = $null; ThresholdMaxJitterMs = $null
 }
 
@@ -22,7 +23,7 @@ $publicDir = Join-Path $PSScriptRoot 'Public'
 $privateScripts = @(
   'Test-PathUnderBase.ps1', 'Common.ps1', 'Validation.ps1',
   'Conversion.ps1', 'JsonParsing.ps1', 'ConfigValidation.ps1', 'ErrorClassification.ps1',
-  'NativeProcess.ps1', 'Connectivity.ps1', 'Results.ps1', 'Profiles.ps1', 'Reporting.ps1',
+  'NativeOutputReader.ps1', 'NativeProcess.ps1', 'Connectivity.ps1', 'Results.ps1', 'Profiles.ps1', 'Reporting.ps1',
   'Iperf3Invocation.ps1', 'Iperf3TestExecution.ps1', 'Orchestration.ps1'
 )
 $publicScripts = @(

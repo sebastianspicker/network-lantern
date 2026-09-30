@@ -68,9 +68,19 @@
   JSON store.
 - Keep machine-local state, operational output, packet captures, and tuning
   exports outside version control.
+- Ignore Python bytecode caches, pytest caches, and TypeScript build metadata.
 - Make the local secret scan inspect tracked and non-ignored untracked files.
 - Align maintained documentation with `main` as the integration branch and the
   current source layout.
+
+### Portability and presentation
+
+- Replace locale-specific default path targets with globally neutral public
+  services (`cloudflare.com`, `google.com`, `wikipedia.org`, `amazon.com`) in the
+  Bash, PowerShell, and Rust path defaults and in `config/hosts.conf`.
+- Publish the static command planner to GitHub Pages through a dedicated
+  workflow.
+- Add a static-planner screenshot tour to the README.
 
 ### Implementation structure
 
@@ -83,9 +93,9 @@
 
 ## Pre-alpha development snapshot (2026-04-18)
 
-This snapshot was previously labeled `v1.0.0`, but no corresponding local or
-remote Git tag exists. The entries are retained as development history and do
-not describe a published stable release.
+This snapshot was previously labeled `v1.0.0`, but no matching Git tag exists
+locally or remotely. It is kept as development history, not a published stable
+release.
 
 ### Added
 

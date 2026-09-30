@@ -51,6 +51,12 @@
 *~
 /.cache/
 
+# Language and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.tsbuildinfo
+
 # Agent and development-assistant files
 AGENT.md
 AGENTS.md
@@ -133,7 +139,6 @@ prompts/
 !/.codacy/codacy.yaml
 !/.codacy/codacy.yml
 .codegraph/
-.repowise/
 /.idea/
 /.vscode/
 
@@ -141,3 +146,10 @@ prompts/
 .DS_Store
 Desktop.ini
 Thumbs.db
+
+# Rust and desktop build products
+/target/
+/desktop/node_modules/
+/desktop/dist/
+/desktop/test-results/
+/desktop/src-tauri/gen/

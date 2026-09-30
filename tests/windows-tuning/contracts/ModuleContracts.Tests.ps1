@@ -172,4 +172,97 @@ Describe 'Windows tuning public contracts' {
       }
     }
   }
+
+  Context 'QoS inventory failure handling' {
+    InModuleScope NetworkLantern.WindowsTuning {
+      It 'does not create or remove a port policy when inventory fails' {
+        if (-not (Get-Command Remove-NetQosPolicy -ErrorAction SilentlyContinue)) {
+          function Remove-NetQosPolicy {
+            [CmdletBinding(SupportsShouldProcess = $true)]
+            param([string]$Name)
+            $null = $Name
+            $null = $PSCmdlet.ShouldProcess($Name, 'Remove')
+          }
+        }
+        if (-not (Get-Command New-NetQosPolicy -ErrorAction SilentlyContinue)) {
+          function New-NetQosPolicy { param() }
+        }
+        Mock Get-NetworkTuningManagedQosPolicy { throw 'injected QoS inventory failure' }
+        Mock Remove-NetQosPolicy {}
+        Mock New-NetQosPolicy {}
+
+        {
+          New-NetworkTuningDscpPolicyByPort -Name 'NL_QOS_PORT_5201' -PortStart 5201 -PortEnd 5201 -Confirm:$false
+        } | Should -Throw '*injected QoS inventory failure*'
+
+        Assert-MockCalled Remove-NetQosPolicy -Times 0 -Exactly
+        Assert-MockCalled New-NetQosPolicy -Times 0 -Exactly
+      }
+
+      It 'does not create or remove an application policy when inventory fails' {
+        if (-not (Get-Command Remove-NetQosPolicy -ErrorAction SilentlyContinue)) {
+          function Remove-NetQosPolicy {
+            [CmdletBinding(SupportsShouldProcess = $true)]
+            param([string]$Name)
+            $null = $Name
+            $null = $PSCmdlet.ShouldProcess($Name, 'Remove')
+          }
+        }
+        if (-not (Get-Command New-NetQosPolicy -ErrorAction SilentlyContinue)) {
+          function New-NetQosPolicy { param() }
+        }
+        Mock Get-NetworkTuningManagedQosPolicy { throw 'injected QoS inventory failure' }
+        Mock Remove-NetQosPolicy {}
+        Mock New-NetQosPolicy {}
+
+        {
+          New-NetworkTuningDscpPolicyByApp -Name 'NL_QOS_APP_1' -ExePath 'C:\Games\Game.exe' -Confirm:$false
+        } | Should -Throw '*injected QoS inventory failure*'
+
+        Assert-MockCalled Remove-NetQosPolicy -Times 0 -Exactly
+        Assert-MockCalled New-NetQosPolicy -Times 0 -Exactly
+      }
+
+      It 'returns Warn before restore mutation when existing QoS inventory fails' {
+        $folder = Join-Path $TestDrive 'qos-inventory-failure'
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $folder $script:NetworkTuningBackupFileQosOurs) -Value 'fixture'
+        Mock Read-NetworkTuningBoundedCliXml {
+          @([pscustomobject]@{ Name = 'NETWORK_LANTERN_QOS_PORT_5201'; Type = 'Port'; Protocol = 'UDP'; Port = 5201; Dscp = 46 })
+        }
+        Mock Get-NetworkTuningManagedQosPolicy { throw 'injected QoS inventory failure' }
+        if (-not (Get-Command Remove-NetQosPolicy -ErrorAction SilentlyContinue)) {
+          function Remove-NetQosPolicy {
+            [CmdletBinding(SupportsShouldProcess = $true)]
+            param([string]$Name)
+            $null = $Name
+            $null = $PSCmdlet.ShouldProcess($Name, 'Remove')
+          }
+        }
+        if (-not (Get-Command New-NetQosPolicy -ErrorAction SilentlyContinue)) {
+          function New-NetQosPolicy { param() }
+        }
+        Mock Remove-NetQosPolicy {}
+        Mock New-NetQosPolicy {}
+
+        $result = Restore-NetworkTuningQosFromBackup -BackupFolder $folder -Confirm:$false 3>$null
+
+        $result.Status | Should -Be 'Warn'
+        $result.Message | Should -Match 'could not be inventoried'
+        Assert-MockCalled Remove-NetQosPolicy -Times 0 -Exactly
+        Assert-MockCalled New-NetQosPolicy -Times 0 -Exactly
+      }
+
+      It 'marks a public restore unsuccessful when QoS restore warns' {
+        Mock Restore-NetworkTuningState {
+          [ordered]@{ Manifest = 'OK'; Registry = 'OK'; Qos = 'Warn'; NicAdvanced = 'OK'; Rsc = 'OK'; PowerPlan = 'OK' }
+        }
+
+        $result = Invoke-NetworkPathTuning -Action Restore -BackupFolder (Join-Path $TestDrive 'restore') -DryRun -PassThru
+
+        $result.Success | Should -BeFalse
+        $result.Components['Qos'] | Should -Be 'Warn'
+      }
+    }
+  }
 }

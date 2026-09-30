@@ -310,9 +310,25 @@ function Get-Iperf3CompletedStreamText {
   }
   $stdout = ''
   $stderr = ''
+  $stdoutTruncated = $false
+  $stderrTruncated = $false
   if ($completed) {
-    try { $stdout = [string]$StdOutTask.Result } catch { $streamError = $_.Exception.Message }
-    try { $stderr = [string]$StdErrTask.Result } catch { $streamError = $_.Exception.Message }
+    try {
+      $stdoutResult = $StdOutTask.Result
+      $stdoutDecoded = [System.Text.Encoding]::UTF8.GetString([byte[]]$stdoutResult.Bytes)
+      $stdoutBounded = ConvertTo-Iperf3BoundedUtf8Text -Text $stdoutDecoded -MaxBytes $script:Iperf3StdOutMaxBytes
+      $stdout = $stdoutBounded.Text
+      $stdoutTruncated = [bool]($stdoutResult.Truncated -or $stdoutBounded.Truncated)
+    }
+    catch { $streamError = $_.Exception.Message }
+    try {
+      $stderrResult = $StdErrTask.Result
+      $stderrDecoded = [System.Text.Encoding]::UTF8.GetString([byte[]]$stderrResult.Bytes)
+      $stderrBounded = ConvertTo-Iperf3BoundedUtf8Text -Text $stderrDecoded -MaxBytes $script:Iperf3StdErrMaxBytes
+      $stderr = $stderrBounded.Text
+      $stderrTruncated = [bool]($stderrResult.Truncated -or $stderrBounded.Truncated)
+    }
+    catch { $streamError = $_.Exception.Message }
   }
   elseif (-not $streamError) {
     $streamError = "Redirected streams did not close within ${TimeoutMs}ms. A descendant may still hold a pipe handle."
@@ -321,6 +337,8 @@ function Get-Iperf3CompletedStreamText {
     Completed = $completed
     StdOut    = $stdout
     StdErr    = $stderr
+    StdOutTruncated = $stdoutTruncated
+    StdErrTruncated = $stderrTruncated
     Error     = $streamError
   }
 }
@@ -360,8 +378,14 @@ function Invoke-Iperf3NativeProcess {
     if (-not $proc) { throw "Failed to start native process: $FilePath" }
     $processId = $proc.Id
     # Start both readers before waiting so neither redirected pipe can fill.
-    $stderrTask = $proc.StandardError.ReadToEndAsync()
-    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = [NetworkLantern.Throughput.Native.BoundedStreamReader]::ReadAsync(
+      $proc.StandardError.BaseStream,
+      $script:Iperf3StdErrMaxBytes
+    )
+    $stdoutTask = [NetworkLantern.Throughput.Native.BoundedStreamReader]::ReadAsync(
+      $proc.StandardOutput.BaseStream,
+      $script:Iperf3StdOutMaxBytes
+    )
     $cancelled = $false
     $hasCancellationContract = -not [string]::IsNullOrWhiteSpace($CancellationFile) -and
       $CancellationRunId -match '^[a-fA-F0-9]{32}$' -and
@@ -427,6 +451,9 @@ function Invoke-Iperf3NativeProcess {
       ExitCode             = $exitCode
       StdOut               = $streamResult.StdOut
       StdErr               = $streamResult.StdErr
+      StdOutTruncated      = [bool]$streamResult.StdOutTruncated
+      StdErrTruncated      = [bool]$streamResult.StdErrTruncated
+      NativeOutputTruncated = [bool]($streamResult.StdOutTruncated -or $streamResult.StdErrTruncated)
       StreamsCompleted     = [bool]$streamResult.Completed
       StreamReadError      = $streamResult.Error
       TimedOut             = $timedOut

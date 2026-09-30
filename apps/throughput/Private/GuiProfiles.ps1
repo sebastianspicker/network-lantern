@@ -1,4 +1,5 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Profile actions retain their existing confirmation dialogs and operate only on operator-selected profile files.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Parameters names the complete profile parameter collection.')]
 param()
 
 function Get-ProfilesFileFromForm {
@@ -33,6 +34,39 @@ function Update-ProfilesList {
   }
 }
 
+function Set-GuiRunFormFromParameters {
+  param(
+    [Parameter(Mandatory)][object]$Form,
+    [Parameter(Mandatory)][object]$Parameters
+  )
+
+  ($Form.Controls.Find('txtTarget', $true) | Select-Object -First 1).Text = [string]$Parameters.Target
+  ($Form.Controls.Find('numPort', $true) | Select-Object -First 1).Value = [int]$Parameters.Port
+  ($Form.Controls.Find('txtOutDir', $true) | Select-Object -First 1).Text = [string]$Parameters.OutDir
+  ($Form.Controls.Find('numDuration', $true) | Select-Object -First 1).Value = [int]$Parameters.Duration
+  ($Form.Controls.Find('comboProtocol', $true) | Select-Object -First 1).SelectedItem = [string]$Parameters.Protocol
+  ($Form.Controls.Find('comboIpVersion', $true) | Select-Object -First 1).SelectedItem = [string]$Parameters.IpVersion
+  ($Form.Controls.Find('chkProgress', $true) | Select-Object -First 1).Checked = [bool]$Parameters.Progress
+  ($Form.Controls.Find('chkSkipReach', $true) | Select-Object -First 1).Checked = [bool]$Parameters.SkipReachabilityCheck
+  ($Form.Controls.Find('chkDisableMtu', $true) | Select-Object -First 1).Checked = [bool]$Parameters.DisableMtuProbe
+  ($Form.Controls.Find('chkSingleTest', $true) | Select-Object -First 1).Checked = [bool]$Parameters.SingleTest
+  ($Form.Controls.Find('chkForce', $true) | Select-Object -First 1).Checked = [bool]$Parameters.Force
+  ($Form.Controls.Find('chkStrict', $true) | Select-Object -First 1).Checked = [bool]$Parameters.StrictConfiguration
+  ($Form.Controls.Find('numOmit', $true) | Select-Object -First 1).Value = [decimal](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'Omit' -Default 1)
+  ($Form.Controls.Find('numRetryCount', $true) | Select-Object -First 1).Value = [decimal](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'RetryCount' -Default 0)
+  ($Form.Controls.Find('txtDscpClasses', $true) | Select-Object -First 1).Text = @(Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'DscpClasses' -Default @('CS0', 'AF11', 'CS5', 'EF', 'AF41')) -join ','
+  ($Form.Controls.Find('txtTcpWindows', $true) | Select-Object -First 1).Text = @(Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'TcpWindows' -Default @('default', '128K', '256K')) -join ','
+  ($Form.Controls.Find('numThresholdMinTput', $true) | Select-Object -First 1).Value = [decimal](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'ThresholdMinThroughputMbps' -Default 0)
+  ($Form.Controls.Find('numThresholdMaxLoss', $true) | Select-Object -First 1).Value = [decimal](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'ThresholdMaxLossPct' -Default -1)
+  ($Form.Controls.Find('numThresholdMaxJitter', $true) | Select-Object -First 1).Value = [decimal](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'ThresholdMaxJitterMs' -Default -1)
+  ($Form.Controls.Find('txtTcpStreams', $true) | Select-Object -First 1).Text = @(Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'TcpStreams' -Default @(1, 4, 8)) -join ','
+  ($Form.Controls.Find('txtUdpStart', $true) | Select-Object -First 1).Text = [string](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'UdpStart' -Default '1M')
+  ($Form.Controls.Find('txtUdpMax', $true) | Select-Object -First 1).Text = [string](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'UdpMax' -Default '1G')
+  ($Form.Controls.Find('txtUdpStep', $true) | Select-Object -First 1).Text = [string](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'UdpStep' -Default '10M')
+  ($Form.Controls.Find('numUdpLossThreshold', $true) | Select-Object -First 1).Value = [decimal](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'UdpLossThreshold' -Default 5.0)
+  Set-GuiMaxTotalTests -Form $Form -Value ([int](Get-GuiProfileValueOrDefault -Parameters $Parameters -Name 'MaxTotalTests' -Default 0))
+}
+
 function Set-RunFormFromSelectedProfile {
   param([System.Windows.Forms.Form]$Form)
   try {
@@ -44,30 +78,9 @@ function Set-RunFormFromSelectedProfile {
     $p = $res.EffectiveParameters
     if (-not $p) { return }
 
-    ($Form.Controls.Find('txtTarget', $true) | Select-Object -First 1).Text = [string]$p.Target
-    ($Form.Controls.Find('numPort', $true) | Select-Object -First 1).Value = [int]$p.Port
-    ($Form.Controls.Find('txtOutDir', $true) | Select-Object -First 1).Text = [string]$p.OutDir
-    ($Form.Controls.Find('numDuration', $true) | Select-Object -First 1).Value = [int]$p.Duration
-    ($Form.Controls.Find('comboProtocol', $true) | Select-Object -First 1).SelectedItem = [string]$p.Protocol
-    ($Form.Controls.Find('comboIpVersion', $true) | Select-Object -First 1).SelectedItem = [string]$p.IpVersion
-    ($Form.Controls.Find('chkProgress', $true) | Select-Object -First 1).Checked = [bool]$p.Progress
-    ($Form.Controls.Find('chkSkipReach', $true) | Select-Object -First 1).Checked = [bool]$p.SkipReachabilityCheck
-    ($Form.Controls.Find('chkDisableMtu', $true) | Select-Object -First 1).Checked = [bool]$p.DisableMtuProbe
-    ($Form.Controls.Find('chkSingleTest', $true) | Select-Object -First 1).Checked = [bool]$p.SingleTest
-    ($Form.Controls.Find('chkForce', $true) | Select-Object -First 1).Checked = [bool]$p.Force
-    ($Form.Controls.Find('chkStrict', $true) | Select-Object -First 1).Checked = [bool]$p.StrictConfiguration
-    ($Form.Controls.Find('numOmit', $true) | Select-Object -First 1).Value = if ($p.Omit) { $p.Omit } else { 1 }
-    ($Form.Controls.Find('numRetryCount', $true) | Select-Object -First 1).Value = if ($p.RetryCount) { $p.RetryCount } else { 0 }
-    ($Form.Controls.Find('txtDscpClasses', $true) | Select-Object -First 1).Text = if ($p.DscpClasses) { ($p.DscpClasses -join ',') } else { 'CS0,AF11,CS5,EF,AF41' }
-    ($Form.Controls.Find('txtTcpWindows', $true) | Select-Object -First 1).Text = if ($p.TcpWindows) { ($p.TcpWindows -join ',') } else { 'default,128K,256K' }
-    ($Form.Controls.Find('numThresholdMinTput', $true) | Select-Object -First 1).Value = if ($p.ThresholdMinThroughputMbps) { $p.ThresholdMinThroughputMbps } else { 0 }
-    ($Form.Controls.Find('numThresholdMaxLoss', $true) | Select-Object -First 1).Value = if ($null -ne $p.ThresholdMaxLossPct) { $p.ThresholdMaxLossPct } else { -1 }
-    ($Form.Controls.Find('numThresholdMaxJitter', $true) | Select-Object -First 1).Value = if ($null -ne $p.ThresholdMaxJitterMs) { $p.ThresholdMaxJitterMs } else { -1 }
-    ($Form.Controls.Find('txtTcpStreams', $true) | Select-Object -First 1).Text = if ($p.TcpStreams) { ($p.TcpStreams -join ',') } else { '1,4,8' }
-    ($Form.Controls.Find('txtUdpStart', $true) | Select-Object -First 1).Text = if ($p.UdpStart) { $p.UdpStart } else { '1M' }
-    ($Form.Controls.Find('txtUdpMax', $true) | Select-Object -First 1).Text = if ($p.UdpMax) { $p.UdpMax } else { '1G' }
-    ($Form.Controls.Find('txtUdpStep', $true) | Select-Object -First 1).Text = if ($p.UdpStep) { $p.UdpStep } else { '10M' }
-    ($Form.Controls.Find('numUdpLossThreshold', $true) | Select-Object -First 1).Value = if ($p.UdpLossThreshold) { $p.UdpLossThreshold } else { 5.0 }
+    Set-GuiRunFormFromParameters -Form $Form -Parameters $p
+    $script:LastPlanPreview = $res
+    Set-GuiPlanSummaryState -Form $Form -State Current -Preview $res
   }
   catch {
     Show-GuiError -Message $_.Exception.Message -Title 'Profiles'
@@ -93,7 +106,8 @@ function Save-ProfileFromForm {
     }
     $profilesPath = Get-ProfilesFileFromForm -Form $Form
     $p = Get-ParamHashFromRunTab -Form $Form
-    $null = Measure-NetworkThroughput @p -ProfilesFile $profilesPath -ProfileName $profileName -SaveProfile -WhatIf -PassThru -Quiet
+    $p['ProfilesFile'] = $profilesPath
+    $null = Measure-NetworkThroughput @p -ProfileName $profileName -SaveProfile -WhatIf -PassThru -Quiet
     Update-ProfilesList -Form $Form
   }
   catch {

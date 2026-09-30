@@ -69,12 +69,18 @@ $files = @(
   }
 )
 
-foreach ($pattern in $patterns) {
-  $hits = if ($files.Count -gt 0) {
-    $files | Select-String -Pattern $pattern
-  }
-  if ($hits) {
-    $hitCount += $hits.Count
+$matchers = @($patterns | ForEach-Object {
+    [regex]::new($_, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  })
+$candidatePattern = [regex]::new(($patterns -join '|'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+foreach ($file in $files) {
+  # ReadLines uses UTF-8 with BOM detection, as Select-String does by default.
+  # Count once per matching pattern per line, including overlapping patterns.
+  foreach ($line in [System.IO.File]::ReadLines($file.FullName)) {
+    if (-not $candidatePattern.IsMatch($line)) { continue }
+    foreach ($matcher in $matchers) {
+      if ($matcher.IsMatch($line)) { $hitCount++ }
+    }
   }
 }
 

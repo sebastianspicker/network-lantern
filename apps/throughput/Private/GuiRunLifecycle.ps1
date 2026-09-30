@@ -298,8 +298,16 @@ function Update-LogAndStateFromJob {
   $output = Receive-RunJobLifecycleOutput -Job $Job
   if ($output) {
     foreach ($item in @($output)) {
+      if ($item -and $item.PSObject -and
+          $item.PSObject.Properties.Name -contains 'Mode' -and $item.Mode -eq 'WhatIf' -and
+          $item.PSObject.Properties.Name -contains 'TotalApprox') {
+        $script:LastPlanPreview = $item
+        Set-GuiPlanSummaryState -Form $Form -State Current -Preview $item
+        continue
+      }
       if ($item -and $item.PSObject -and $item.PSObject.Properties.Name -contains 'ExitCode' -and $item.PSObject.Properties.Name -contains 'Status') {
         $script:LastRunSummary = $item
+        Set-GuiLastRunSummary -Form $Form -Summary $item
         $summaryPathBox = $Form.Controls.Find('txtLastSummary', $true) | Select-Object -First 1
         $reportPathBox = $Form.Controls.Find('txtLastReport', $true) | Select-Object -First 1
         if ($summaryPathBox -and $item.Supplemental.SummaryJsonPath) { $summaryPathBox.Text = [string]$item.Supplemental.SummaryJsonPath }
@@ -334,6 +342,16 @@ function Update-LogAndStateFromJob {
           -TerminalRecords $script:RunJobTerminalRecords
       } else { $null }
       $StatusLabel.Text = if ($verifiedCleanup) { 'Cancelled' } else { 'Cancelled; iperf3 cleanup unverified' }
+      if ($script:RunIsPreview) {
+        Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage 'Plan preview was cancelled. Preview again when ready.'
+      }
+    }
+    elseif ($script:RunIsPreview -and $script:LastPlanPreview) {
+      $StatusLabel.Text = "Preview ready: $($script:LastPlanPreview.TotalApprox) tests (${elapsed}s)"
+    }
+    elseif ($script:RunIsPreview) {
+      $StatusLabel.Text = "Preview failed (${elapsed}s)"
+      Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage 'The plan could not be calculated. Review the run log and correct the settings.'
     }
     elseif ($script:LastRunSummary) {
       $StatusLabel.Text = "Done: $($script:LastRunSummary.Status) (${elapsed}s)"
@@ -348,6 +366,7 @@ function Update-LogAndStateFromJob {
       $script:RunJobStartedRecords = @()
       $script:RunJobTerminalRecords = @()
       $script:RunCancellationRequested = $false
+      $script:RunIsPreview = $false
     }
     return $true
   }
@@ -363,6 +382,10 @@ function Update-LogAndStateFromJob {
       $script:RunJobStartedRecords = @()
       $script:RunJobTerminalRecords = @()
       $script:RunCancellationRequested = $false
+      if ($script:RunIsPreview) {
+        Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage 'The plan preview stopped before completing.'
+      }
+      $script:RunIsPreview = $false
     }
     return $true
   }
@@ -372,7 +395,8 @@ function Update-LogAndStateFromJob {
 function Stop-CurrentRunJob {
   param(
     [object]$Timer,
-    [object]$StatusLabel
+    [object]$StatusLabel,
+    [object]$Form
   )
   if (-not $script:RunJob) {
     Clear-RunCancellationContext
@@ -461,6 +485,10 @@ function Stop-CurrentRunJob {
         'Cancellation pending; iperf3 cleanup unverified'
       }
     }
+    if ($script:RunIsPreview -and $Form) {
+      Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage 'Plan preview was cancelled. Preview again when ready.'
+    }
+    if ($releaseJob) { $script:RunIsPreview = $false }
   }
   return $releaseJob
 }
@@ -484,6 +512,18 @@ function Start-RunFromUi {
   )
   if (-not (Test-RunFormValid -Form $Form -ErrorProvider $ErrorProvider)) { return }
 
+  try {
+    $params = Get-ParamHashFromRunTab -Form $Form
+  }
+  catch {
+    $StatusLabel.Text = 'Check the highlighted settings'
+    if ($WhatIf) {
+      Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage $_.Exception.Message
+    }
+    Show-GuiError -Message $_.Exception.Message -Title 'Validation'
+    return
+  }
+
   Update-UiBusyState -Form $Form -Busy $true
   $ProgressBar.Value = 0
   $StatusLabel.Text = if ($WhatIf) { 'WhatIf preview...' } else { 'Starting run...' }
@@ -493,7 +533,11 @@ function Start-RunFromUi {
   $script:RunJobStartedRecords = @()
   $script:RunJobTerminalRecords = @()
   $script:RunCancellationRequested = $false
-  $params = Get-ParamHashFromRunTab -Form $Form
+  $script:RunIsPreview = [bool]$WhatIf
+  if ($WhatIf) {
+    $script:LastPlanPreview = $null
+    Set-GuiPlanSummaryState -Form $Form -State Loading
+  }
   $script:RunJobCancellationContext = New-RunCancellationContext
 
   try {
@@ -509,6 +553,10 @@ function Start-RunFromUi {
     Update-UiBusyState -Form $Form -Busy $false
     $StatusLabel.Text = if ($WhatIf) { 'Failed to start preview' } else { 'Failed to start run' }
     $errorTitle = if ($WhatIf) { 'Preview failed to start' } else { 'Run failed to start' }
+    if ($WhatIf) {
+      Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage $_.Exception.Message
+    }
+    $script:RunIsPreview = $false
     Show-GuiError -Message $_.Exception.Message -Title $errorTitle
     return
   }

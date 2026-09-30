@@ -84,7 +84,7 @@ function Write-NetworkLanternWorkflowProfileWarnings {
 
   $knownKeysBySection = @{
     path          = @('hostsIPv4', 'hostsIPv6', 'protocols', 'rounds')
-    throughput    = @('target', 'port', 'protocol')
+    throughput    = @('target', 'port', 'protocol', 'maxTotalTests')
     windowsTuning = @('action', 'profile', 'udpPorts', 'appPaths')
   }
 
@@ -106,6 +106,93 @@ function Write-NetworkLanternWorkflowProfileWarnings {
       }
     }
   }
+}
+
+function ConvertTo-NetworkLanternWorkflowString {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][object]$Value,
+    [Parameter(Mandatory)][string]$Name
+  )
+
+  if ($null -eq $Value) { return $null }
+  if ($Value -isnot [string]) {
+    throw "$Name must be a string."
+  }
+  return [string]$Value
+}
+
+function ConvertTo-NetworkLanternWorkflowStringArray {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][object]$Value,
+    [Parameter(Mandatory)][string]$Name,
+    [string[]]$AllowedValues
+  )
+
+  if ($null -eq $Value) { return [string[]]@() }
+  $items = if ($Value -is [string]) {
+    @($Value)
+  } elseif ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [System.Collections.IDictionary]) {
+    @($Value)
+  } else {
+    throw "$Name must be a string or an array of strings."
+  }
+
+  $result = foreach ($item in $items) {
+    if ($item -isnot [string]) {
+      throw "$Name must contain only strings."
+    }
+    if ($PSBoundParameters.ContainsKey('AllowedValues') -and $item -notin $AllowedValues) {
+      throw "$Name contains unsupported value '$item'. Allowed values: $($AllowedValues -join ', ')."
+    }
+    [string]$item
+  }
+  return [string[]]@($result)
+}
+
+function ConvertTo-NetworkLanternWorkflowInteger {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][object]$Value,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][long]$Minimum,
+    [Parameter(Mandatory)][long]$Maximum
+  )
+
+  $integerTypes = @([byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64])
+  if ($null -eq $Value -or $Value.GetType() -notin $integerTypes) {
+    throw "$Name must be an integer."
+  }
+  try {
+    $number = [long]$Value
+  } catch {
+    throw "$Name must be between $Minimum and $Maximum."
+  }
+  if ($number -lt $Minimum -or $number -gt $Maximum) {
+    throw "$Name must be between $Minimum and $Maximum."
+  }
+  return $number
+}
+
+function ConvertTo-NetworkLanternWorkflowUInt16Array {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][object]$Value,
+    [Parameter(Mandatory)][string]$Name
+  )
+
+  if ($null -eq $Value) { return [uint16[]]@() }
+  $items = if ($Value -is [System.Collections.IEnumerable] -and
+      $Value -isnot [string] -and $Value -isnot [System.Collections.IDictionary]) {
+    @($Value)
+  } else {
+    @($Value)
+  }
+  $result = foreach ($item in $items) {
+    [uint16](ConvertTo-NetworkLanternWorkflowInteger -Value $item -Name $Name -Minimum 0 -Maximum 65535)
+  }
+  return [uint16[]]@($result)
 }
 
 function Resolve-NetworkLanternEffectiveValue {

@@ -1,0 +1,26 @@
+{
+  "Workflow": "Baseline",
+  "Steps": [
+    {
+      "Capability": "Path",
+      "Parameters": {
+        "LogDirectory": "/fixture/path",
+        "Protocols": [
+          "IPv4",
+          "IPv6"
+        ]
+      }
+    },
+    {
+      "Capability": "Throughput",
+      "Parameters": {
+        "Target": "fixture.invalid",
+        "OutDir": "/fixture/throughput",
+        "MaxTotalTests": 0,
+        "SingleTest": true,
+        "Port": 5201,
+        "Protocol": "Both"
+      }
+    }
+  ]
+}

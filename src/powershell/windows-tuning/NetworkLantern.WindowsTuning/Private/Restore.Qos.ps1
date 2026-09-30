@@ -143,9 +143,10 @@ function Restore-NetworkTuningQosFromBackup {
 
   $existingPolicies = @()
   try {
-    $existingPolicies = @(Get-NetworkTuningManagedQosPolicy)
+    $existingPolicies = @(Get-NetworkTuningManagedQosPolicy -ErrorOnFailure)
   } catch {
-    Write-Verbose -Message 'Could not snapshot existing QoS policies before restore.'
+    Write-Warning -Message ("Could not snapshot existing QoS policies before restore. No policies were changed. ({0})" -f $_.Exception.Message)
+    return Get-NetworkTuningRestoreComponentResult -Status 'Warn' -Message 'Existing QoS policies could not be inventoried.'
   }
 
   $existingByName = @{}

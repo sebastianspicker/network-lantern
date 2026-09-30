@@ -1,0 +1,38 @@
+[Unit]
+Description=Network Lantern privileged helper for UID %i
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=NETWORK_LANTERN_OWNER_UID=%i
+ExecStart=/usr/libexec/network-lantern-helper
+ExecStopPost=/usr/libexec/network-lantern-helper --cleanup-credentials
+Restart=no
+RuntimeDirectory=network-lantern
+RuntimeDirectoryMode=0755
+StateDirectory=network-lantern
+StateDirectoryMode=0755
+UMask=0077
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_NET_RAW
+AmbientCapabilities=
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/run/network-lantern /var/lib/network-lantern
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -136,6 +136,10 @@ function Add-Iperf3TestResult {
       Metrics        = $Metrics
       Args           = $Run.Args
       RawText        = $Run.RawText
+      StdOutTruncated = [bool]($Run.PSObject.Properties.Name -contains 'StdOutTruncated' -and $Run.StdOutTruncated)
+      StdErrTruncated = [bool]($Run.PSObject.Properties.Name -contains 'StdErrTruncated' -and $Run.StdErrTruncated)
+      NativeOutputTruncated = [bool]($Run.PSObject.Properties.Name -contains 'NativeOutputTruncated' -and $Run.NativeOutputTruncated)
+      RawTextTruncated = [bool]($Run.PSObject.Properties.Name -contains 'RawTextTruncated' -and $Run.RawTextTruncated)
       JsonParseError = $jsonParseError
       MetricError    = $metricError
     })

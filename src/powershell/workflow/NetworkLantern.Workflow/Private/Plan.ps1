@@ -55,6 +55,7 @@ function New-NetworkLanternThroughputStep {
     Target   = $Configuration.IperfTarget
     Port     = $Configuration.IperfPort
     Protocol = $Configuration.ThroughputProtocol
+    MaxTotalTests = $Configuration.ThroughputMaxTotalTests
     OutDir   = $Artifacts.Throughput
   }
   if ($Configuration.Workflow -eq 'Baseline') { $parameters['SingleTest'] = $true }

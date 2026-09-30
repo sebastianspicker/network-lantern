@@ -6,8 +6,8 @@ PATH_ALL_TEST_TYPES=(ICMP4 ICMP6 UDP4 UDP6 TCP4 TCP6 MPLS4 MPLS6 AS4 AS6)
 PATH_ALL_ROUNDS=(Standard MTU1400 TOS_CS5 TOS_AF11 TTL10 TTL64 FirstTTL3 Timeout5)
 PATH_DEFAULT_TEST_TYPES=(ICMP4 ICMP6 TCP4 TCP6)
 PATH_DEFAULT_ROUNDS=(Standard)
-PATH_DEFAULT_HOSTS_IPV4=(netcologne.de google.com wikipedia.org amazon.de)
-PATH_DEFAULT_HOSTS_IPV6=(netcologne.de google.com wikipedia.org)
+PATH_DEFAULT_HOSTS_IPV4=(cloudflare.com google.com wikipedia.org amazon.com)
+PATH_DEFAULT_HOSTS_IPV6=(cloudflare.com google.com wikipedia.org)
 
 path_usage() {
 	cat <<USAGE

@@ -48,7 +48,7 @@ _capture_mtr_with_deadline() {
   shift
   local mtr_pid
   local timed_out=0
-  local remaining_ticks=$((MTR_TIMEOUT_SECONDS * 10))
+  local remaining_ticks=$((MTR_TIMEOUT_SECONDS * 2))
 
   mtr "$@" -- "$host" >"$CURRENT_TMP" 2>>"$TABLE_LOG" &
   mtr_pid=$!
@@ -60,7 +60,7 @@ _capture_mtr_with_deadline() {
       _terminate_mtr_at_deadline "$mtr_pid"
       break
     fi
-    sleep 0.1
+    sleep 0.5
     ((remaining_ticks--)) || true
   done
 

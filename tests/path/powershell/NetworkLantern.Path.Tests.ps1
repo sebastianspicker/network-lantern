@@ -133,4 +133,92 @@ Describe 'Network Lantern Path diagnostic result behavior' {
       (Import-Csv -LiteralPath $csvPath)[0].PortsStatus | Should -Be 'Skipped'
     }
   }
+
+  It 'publishes JSON and CSV through unique sibling files without changing their schema or encoding' {
+    InModuleScope 'NetworkLantern.Path' {
+      $jsonPath = Join-Path $TestDrive 'atomic.json'
+      $csvPath = Join-Path $TestDrive 'atomic.csv'
+      [System.IO.File]::WriteAllText($jsonPath, 'old-json')
+      [System.IO.File]::WriteAllText($csvPath, 'old-csv')
+      $result = [pscustomobject]@{
+        Timestamp = '2026-01-01T00:00:00Z'; Round = 'Standard'; Protocol = 'IPv4'; Host = '=formula'
+        PingStatus = 'OK'; TracertStatus = 'OK'; PathpingStatus = 'Skipped'; Tcp443Status = 'OK'
+        PortsStatus = 'Skipped'; OverallStatus = 'OK'; PingOk = $true; TracertOk = $true
+        PathpingOk = $null; Tcp443OK = $true
+      }
+
+      Save-DiagnosticResults -Results @($result) -JsonPath $jsonPath -CsvPath $csvPath
+
+      @(Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json).Count | Should -Be 1
+      (Import-Csv -LiteralPath $csvPath)[0].Host | Should -Be "'=formula"
+      [System.IO.File]::ReadAllBytes($jsonPath)[0..2] | Should -Not -Be @(0xEF, 0xBB, 0xBF)
+      [System.IO.File]::ReadAllBytes($csvPath)[0..2] | Should -Not -Be @(0xEF, 0xBB, 0xBF)
+      @(Get-ChildItem -LiteralPath $TestDrive -Filter '.*.tmp' -Force).Count | Should -Be 0
+    }
+  }
+
+  It 'preserves an existing artifact and cleans only its own temporary file when writing fails' {
+    InModuleScope 'NetworkLantern.Path' {
+      $destination = Join-Path $TestDrive 'write-failure.json'
+      $unrelatedTemporary = Join-Path $TestDrive '.unrelated.tmp'
+      [System.IO.File]::WriteAllText($destination, 'prior')
+      [System.IO.File]::WriteAllText($unrelatedTemporary, 'keep')
+      Mock Write-DiagnosticArtifactTemporaryFile {
+        param($Stream)
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes('partial')
+        $Stream.Write($bytes, 0, $bytes.Length)
+        throw 'injected artifact write failure'
+      }
+
+      {
+        Publish-DiagnosticArtifact -Path $destination -Content 'new' -Encoding ([System.Text.UTF8Encoding]::new($false))
+      } | Should -Throw '*injected artifact write failure*'
+
+      [System.IO.File]::ReadAllText($destination) | Should -Be 'prior'
+      [System.IO.File]::ReadAllText($unrelatedTemporary) | Should -Be 'keep'
+      @(Get-ChildItem -LiteralPath $TestDrive -Filter '.write-failure.json.*.tmp' -Force).Count | Should -Be 0
+    }
+  }
+
+  It 'preserves an existing artifact and removes its flushed temporary file when replacement fails' {
+    InModuleScope 'NetworkLantern.Path' {
+      $destination = Join-Path $TestDrive 'replace-failure.csv'
+      [System.IO.File]::WriteAllText($destination, 'prior')
+      Mock Move-DiagnosticArtifactIntoPlace { throw 'injected artifact replace failure' }
+
+      {
+        Publish-DiagnosticArtifact -Path $destination -Content 'new' -Encoding ([System.Text.UTF8Encoding]::new($false))
+      } | Should -Throw '*injected artifact replace failure*'
+
+      [System.IO.File]::ReadAllText($destination) | Should -Be 'prior'
+      @(Get-ChildItem -LiteralPath $TestDrive -Filter '.replace-failure.csv.*.tmp' -Force).Count | Should -Be 0
+    }
+  }
+
+  It 'preserves a foreign sibling file when exclusive temporary creation collides' {
+    InModuleScope 'NetworkLantern.Path' {
+      $destination = Join-Path $TestDrive 'collision.json'
+      $foreignTemporary = Join-Path $TestDrive '.collision.json.foreign.tmp'
+      [System.IO.File]::WriteAllText($destination, 'prior')
+      [System.IO.File]::WriteAllText($foreignTemporary, 'foreign')
+      Mock New-DiagnosticArtifactTemporaryPath { $foreignTemporary }
+
+      {
+        Publish-DiagnosticArtifact -Path $destination -Content 'new' -Encoding ([System.Text.UTF8Encoding]::new($false))
+      } | Should -Throw
+
+      [System.IO.File]::ReadAllText($destination) | Should -Be 'prior'
+      [System.IO.File]::ReadAllText($foreignTemporary) | Should -Be 'foreign'
+    }
+  }
+
+  It 'publishes an empty artifact for a zero-row CSV result set' {
+    InModuleScope 'NetworkLantern.Path' {
+      $path = Join-Path $TestDrive 'empty.csv'
+
+      Publish-DiagnosticArtifact -Path $path -Content '' -Encoding ([System.Text.UTF8Encoding]::new($false))
+
+      (Get-Item -LiteralPath $path).Length | Should -Be 0
+    }
+  }
 }

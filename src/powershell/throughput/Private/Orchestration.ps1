@@ -22,7 +22,13 @@ function Build-TestPlan {
     [Parameter(Mandatory)]
     [string]$UdpMax,
     [Parameter(Mandatory)]
-    [string]$UdpStep
+    [string]$UdpStep,
+    [ValidateRange(1, 3600)]
+    [int]$Duration = 10,
+    [ValidateRange(0, 60)]
+    [int]$Omit = 1,
+    [ValidateRange(0, 1000000)]
+    [int]$MaxTotalTests = 0
   )
   $nDscp = if ($SingleTest) { 1 } else { $DscpClasses.Count }
   $nTcpStreams = if ($SingleTest) { 1 } else { $TcpStreams.Count }
@@ -33,13 +39,14 @@ function Build-TestPlan {
   $curMbps = ConvertTo-MbitPerSecond $UdpStart
   $maxMbps = ConvertTo-MbitPerSecond $UdpMax
   $stepMbps = [math]::Max((ConvertTo-MbitPerSecond $UdpStep), 1)
-  $udpSatSteps = if ($Protocol -eq 'TCP' -or $SingleTest -or $maxMbps -le $curMbps) { 0 } else { [math]::Min([int](($maxMbps - $curMbps) / $stepMbps) + 1, $script:MaxUdpSaturationIterations) }
+  $udpSatSteps = if ($Protocol -eq 'TCP' -or $SingleTest) { 0 } else { Get-Iperf3UdpSaturationStepCount -CurMbps $curMbps -MaxMbps $maxMbps -StepMbps $stepMbps }
   $udpSatPerDscp = 2 * $udpSatSteps
   $runSingleUdp = [bool]($SingleTest -and $Protocol -eq 'UDP')
   $runTcp = if ($SingleTest) { $Protocol -ne 'UDP' } else { ($Protocol -eq 'TCP' -or $Protocol -eq 'Both') }
   $runUdpMatrix = if ($SingleTest) { $false } else { ($Protocol -eq 'UDP' -or $Protocol -eq 'Both') }
   $totalApprox = if ($SingleTest) { 1 } else { $nDscp * ($tcpPerDscp + $udpFixedPerDscp + $udpSatPerDscp) }
   if ($totalApprox -lt 1) { $totalApprox = 1 }
+  $withinTestBudget = ($MaxTotalTests -eq 0 -or $totalApprox -le $MaxTotalTests)
   return [pscustomobject]@{
     TotalApprox    = $totalApprox
     CurMbps        = $curMbps
@@ -48,7 +55,10 @@ function Build-TestPlan {
     DscpList       = if ($SingleTest) { $DscpClasses[0..0] } else { $DscpClasses }
     TcpStreamsList = if ($SingleTest) { @(1) } else { $TcpStreams }
     TcpWindowsList = if ($SingleTest) { @('default') } else { $TcpWindows }
-    DirsTcpList    = if ($SingleTest) { @('TX') } else { @('TX', 'RX', 'BD') }
+    DirsTcpList    = if ($SingleTest) { @('TX') } elseif ($Caps.BidirSupported) { @('TX', 'RX', 'BD') } else { @('TX', 'RX') }
+    EstimatedTestSeconds = [long]$totalApprox * [long]($Duration + $Omit)
+    MaxTotalTests  = $MaxTotalTests
+    WithinTestBudget = $withinTestBudget
     RunTcp         = $runTcp
     RunUdp         = $runUdpMatrix
     RunSingleUdp   = $runSingleUdp
@@ -279,7 +289,8 @@ function Write-FinalOutputs {
     [nullable[double]]$ThresholdMaxJitterMs
   )
   try {
-    $CsvRowsList | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8
+    $csvText = (($CsvRowsList | ConvertTo-Csv -NoTypeInformation) -join [Environment]::NewLine) + [Environment]::NewLine
+    Set-Iperf3TextFileAtomic -Path $CsvPath -Text $csvText
     $csvStatus = 'OK'
   }
   catch {
@@ -288,7 +299,7 @@ function Write-FinalOutputs {
     $csvStatus = 'Warn'
   }
   try {
-    $FinalResultObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $JsonPath -Encoding UTF8
+    Set-Iperf3JsonFileAtomic -Path $JsonPath -InputObject $FinalResultObject
     $jsonStatus = 'OK'
   }
   catch {

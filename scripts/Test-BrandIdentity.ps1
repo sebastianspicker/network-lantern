@@ -27,7 +27,6 @@ $allowedFilePattern = '^(?:' + (($allowedFilePaths | ForEach-Object { [regex]::E
 $allowedMigrationLinkPattern = '(docs/)?migration/from-(network-diagnostics-suite|mtr-test-suite|iperf3-test-suite|windows-udp-jitter-optimization)\.md'
 $textFilePattern = '(?i)(^Makefile$|\.(bash|json|md|ps1|psd1|psm1|sh|ya?ml)$)'
 $protectedPathPattern = '(?i)((^|/)\.env($|\.)|\.(key|p12|pem|pfx)$|(^|/)id_(ed25519|rsa)(\.pub)?$)'
-$generatedMetadataPathPattern = '^(\.repowise)(/|$)'
 
 $relativePaths = @(
   & git -C $RepoRoot ls-files --cached --others --exclude-standard |
@@ -41,7 +40,6 @@ $findings = [System.Collections.Generic.List[string]]::new()
 foreach ($relativePath in $relativePaths) {
   $normalizedPath = $relativePath.Replace('\', '/')
   if ($normalizedPath -notmatch $textFilePattern -or $normalizedPath -match $protectedPathPattern) { continue }
-  if ($normalizedPath -match $generatedMetadataPathPattern) { continue }
   if ($normalizedPath -match $allowedFilePattern) { continue }
 
   $fullPath = Join-Path -Path $RepoRoot -ChildPath $relativePath

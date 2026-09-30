@@ -69,7 +69,7 @@ function New-NetworkTuningDscpPolicyByPort {
   }
 
   # Clean up existing policies that match the prefix
-  $existingPolicies = Get-NetworkTuningManagedQosPolicy | Where-Object { $_.Name -match ("^" + [regex]::Escape($Name)) }
+  $existingPolicies = Get-NetworkTuningManagedQosPolicy -ErrorOnFailure | Where-Object { $_.Name -match ("^" + [regex]::Escape($Name)) }
   foreach ($existing in $existingPolicies) {
     if ($PSCmdlet.ShouldProcess($existing.Name, 'Remove existing NetQosPolicy')) {
       try { Remove-NetQosPolicy -Name $existing.Name -Confirm:$false -ErrorAction Stop | Out-Null }
@@ -117,7 +117,7 @@ function New-NetworkTuningDscpPolicyByApp {
     return $true
   }
 
-  foreach ($existing in (Get-NetworkTuningManagedQosPolicy | Where-Object { $_.Name -eq $Name })) {
+  foreach ($existing in (Get-NetworkTuningManagedQosPolicy -ErrorOnFailure | Where-Object { $_.Name -eq $Name })) {
     if (-not $PSCmdlet.ShouldProcess($existing.Name, 'Remove NetQosPolicy')) {
       continue
     }

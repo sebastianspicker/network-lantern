@@ -15,7 +15,7 @@ function Get-NetworkLanternWorkflowCapabilityDescriptors {
     }
     Throughput = @{
       AdapterRelativePath = 'apps/throughput/Measure-NetworkThroughput.ps1'
-      AllowedParameters = @('Target', 'Port', 'Protocol', 'OutDir', 'SingleTest', 'WhatIf', 'Quiet')
+      AllowedParameters = @('Target', 'Port', 'Protocol', 'MaxTotalTests', 'OutDir', 'SingleTest', 'WhatIf', 'Quiet')
       RepositoryRelativeParameters = @{ ProfilesFile = 'profiles/throughput-profiles.local.json' }
     }
     WindowsTuning = @{
@@ -69,6 +69,10 @@ function New-NetworkLanternCapabilityChildBootstrap {
   $descriptorsJson = ConvertTo-Json -InputObject (Get-NetworkLanternWorkflowCapabilityDescriptors) -Compress -Depth 8
   $descriptorsEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($descriptorsJson))
   $bootstrap = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+`$global:LASTEXITCODE = 0
+
 `$trustedRepositoryRoot = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$rootEncoded'))
 `$trustedDescriptorsJson = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$descriptorsEncoded'))
 `$trustedDescriptors = ConvertFrom-Json -InputObject `$trustedDescriptorsJson -AsHashtable
@@ -122,7 +126,11 @@ foreach (`$parameterName in @(`$descriptor.RepositoryRelativeParameters.Keys)) {
 
 `$trustedAdapter = Join-Path `$trustedRepositoryRoot `$descriptor.AdapterRelativePath
 & `$trustedAdapter @parameters
-exit ([int]`$LASTEXITCODE)
+`$adapterStatus = `$LASTEXITCODE
+if (`$null -eq `$adapterStatus) {
+  throw "Workflow capability '`$capability' did not return a process exit status."
+}
+exit ([int]`$adapterStatus)
 "@
 
   return [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($bootstrap))
@@ -148,7 +156,12 @@ function Invoke-NetworkLanternCapabilityChild {
     throw 'Workflow child envelope exceeds maximum size (1 MB).'
   }
 
+  $global:LASTEXITCODE = $null
   $bootstrap = New-NetworkLanternCapabilityChildBootstrap -RepositoryRoot $RepositoryRoot
   $envelopeJson | & pwsh -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $bootstrap | Out-Host
-  return [int]$LASTEXITCODE
+  $childStatus = $LASTEXITCODE
+  if ($null -eq $childStatus) {
+    throw "Workflow capability '$capability' did not return a process exit status."
+  }
+  return [int]$childStatus
 }

@@ -1,0 +1,31 @@
+{
+  "name": "network-lantern-desktop-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run",
+    "build": "npm run check && vite build && node scripts/check-production.mjs",
+    "build:e2e": "npm run check && vite build --mode e2e && node scripts/build-native.mjs",
+    "test:native": "node scripts/run-native.mjs",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18",
+    "@playwright/test": "^1.58.2",
+    "@wdio/cli": "^9.24.0",
+    "@wdio/local-runner": "^9.24.0",
+    "@wdio/mocha-framework": "^9.24.0",
+    "@wdio/spec-reporter": "^9.24.0",
+    "@wdio/tauri-service": "^1.0.0",
+    "@wdio/tauri-plugin": "^1.0.0",
+    "@wdio/globals": "^9.24.0"
+  }
+}

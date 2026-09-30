@@ -1,4 +1,4 @@
-.PHONY: lint test test-bash test-pwsh ci-local
+.PHONY: lint test test-bash test-pwsh test-site ci-local
 
 SHELLCHECK ?= shellcheck
 BATS ?= bats
@@ -14,7 +14,10 @@ test-bash:
 test-pwsh:
 	pwsh -NoProfile -NonInteractive -File scripts/ci.ps1 -NoInstall
 
-test: test-bash test-pwsh
+test-site:
+	node --test tests/site/*.test.cjs
+
+test: test-bash test-site test-pwsh
 
 ci-local:
 	./scripts/ci-local.sh

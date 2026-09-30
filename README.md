@@ -1,163 +1,110 @@
 # Network Lantern
 
-Network Lantern is a source-based toolkit for network diagnostics. It contains:
+**Collect path and throughput evidence from a source checkout, and optionally inspect or change a limited set of Windows network settings.**
 
-- Windows path diagnostics using `ping`, `tracert`, `pathping`, and
-  `Test-NetConnection`
-- Bash path diagnostics using `mtr`
-- TCP and UDP throughput measurements using `iperf3`
-- optional Windows QoS, NIC power-saving, and power-plan configuration
-- a PowerShell entrypoint that composes the path, throughput, and tuning tools
+[![CI](https://github.com/sebastianspicker/network-lantern/actions/workflows/ci.yml/badge.svg)](https://github.com/sebastianspicker/network-lantern/actions/workflows/ci.yml)
+[![Rust migration](https://github.com/sebastianspicker/network-lantern/actions/workflows/rust.yml/badge.svg)](https://github.com/sebastianspicker/network-lantern/actions/workflows/rust.yml)
+[![Pages](https://github.com/sebastianspicker/network-lantern/actions/workflows/pages.yml/badge.svg)](https://github.com/sebastianspicker/network-lantern/actions/workflows/pages.yml)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Version 0.1.0-alpha.1](https://img.shields.io/badge/version-0.1.0--alpha.1-orange.svg)
+![Platforms: Windows, macOS, Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 
-## Static workflow demo
+<img src="docs/images/planner-triage.png" alt="The Network Lantern command planner showing the Triage workflow and a generated dry-run command" width="880">
 
-The [GitHub Pages demo](https://sebastianspicker.github.io/network-lantern/) is
-a static, click-through simulation of workflow planning. It uses sanitized
-fixture values and never runs diagnostics, contacts targets, writes files, or
-changes settings. Use a source checkout and the commands in this README for
-real, authorized diagnostic work.
+Network Lantern is built for operators who diagnose networks they are authorized
+to test, and for maintainers who extend one capability at a time. Everything runs
+locally: there is no hosted service, remote API, installer, container image, or
+published package. Clone the repository and run the tools on the host you are
+diagnosing.
 
-Serve the same tracked artifact locally from the repository root:
+> [!NOTE]
+> This is an early alpha. `VERSION` reads `0.1.0-alpha.1`, and there is no
+> release tag yet. Public parameters, module exports, profiles, result schemas,
+> and paths can change before a stable release.
+
+## What it does
+
+Network Lantern is four independent diagnostic capabilities plus a planner:
+
+- **Path** traces reachability and routing.
+  - Windows: `ping`, `tracert`, optional `pathping`, and a TCP 443 check.
+  - Linux/macOS: an `mtr` matrix driven by Bash 4+.
+- **Throughput** runs TCP or UDP `iperf3` matrices, manages profiles, and
+  compares summaries. A Windows Forms client is included.
+- **Windows tuning** (optional) previews, backs up, applies, or restores a small
+  set of Windows network settings. Real changes need elevation.
+- **Static planner** (`site/`) generates dry-run commands in the browser. It is a
+  preview surface only: it never runs probes, calls a service, or saves input.
+
+The two path implementations are intentionally separate. They share a target
+configuration file, but not a probe set, plan, or result schema.
+
+## Screenshot tour
+
+The planner is a static page. Pick a workflow, set a target, and copy a command
+with `--dry-run` already included. Invalid hosts, ports, or budgets block
+generation until you fix them. The full Triage view is shown at the top of this
+page.
+
+| Throughput matrix options | Windows tuning preview |
+| --- | --- |
+| <img src="docs/images/planner-throughput.png" alt="Throughput workflow with iperf3 server, port, protocol, and maximum test budget" width="430"> | <img src="docs/images/planner-windows-tuning.png" alt="Windows tuning workflow with action, profile, and managed UDP port" width="430"> |
+
+| Bad input is explained before a command is generated | The planner fits small screens |
+| --- | --- |
+| <img src="docs/images/planner-validation.png" alt="Validation message shown after entering a host with a port" width="430"> | <img src="docs/images/planner-mobile.png" alt="The planner on a narrow mobile viewport" width="200"> |
+
+A live copy is published to GitHub Pages by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) at
+<https://sebastianspicker.github.io/network-lantern/>. Enable Pages once with the
+GitHub Actions source in the repository settings; the workflow deploys on pushes
+that touch `site/`. Run the planner locally with:
 
 ```bash
 python3 -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
-Then open <http://127.0.0.1:8000/>. This repository does not contain a GitHub
-Pages deployment workflow, so the hosted page is a visual reference rather
-than proof that the current worktree has been deployed.
-
-The tools run locally and write files for later inspection. The repository does
-not provide a service, remote API, installer, container image, or package.
-
-## Status and scope
-
-`VERSION` currently contains `0.1.0-alpha.1`. There is no release tag in this
-repository. Public parameters, profile formats, output schemas, module exports,
-and paths may change before a stable release.
-
-| Area | Implementation |
-| --- | --- |
-| PowerShell path diagnostics | Windows-only live runs; JSON and CSV output |
-| Bash path diagnostics | Bash 4+ and `mtr`; JSON-object stream and text summary output |
-| Throughput CLI | PowerShell module and script for TCP or UDP `iperf3` runs, DSCP matrices, thresholds, profiles, and summary comparison |
-| Throughput GUI | Windows Forms client for the throughput module |
-| Orchestration | `Triage`, `Path`, `Throughput`, `Baseline`, and `WindowsTuning` workflows |
-| Windows tuning | Read-only verification, dry-run planning, backup, apply, and restore |
-
-Current limitations:
-
-- The PowerShell path implementation requires Windows for live runs. On other
-  platforms it supports `-DryRun` only.
-- The Bash and PowerShell path tools use different test matrices and output
-  schemas.
-- Direct live throughput runs on Linux and macOS require
-  `-SkipReachabilityCheck -DisableMtuProbe`. The orchestrator does not expose
-  these switches, so its live throughput workflows currently require Windows.
-- A default full throughput matrix can plan 1,110 tests when `iperf3` supports
-  bidirectional mode. Use `-WhatIf` before a live matrix run.
-- The throughput cancellation protocol has direct contract coverage; GUI
-  automation is not retained.
-- Real Windows `Apply`, `Backup`, and `Restore` operations change system state.
-  Their validation logic is tested, but an elevated apply and restore cycle has
-  not been verified on a disposable Windows VM for this revision.
+Then open <http://127.0.0.1:8000/>. The planner is a convenience layer, not an
+authority. Your local PowerShell preview remains the source of truth for test
+counts, duration estimates, budget checks, and backup validation.
 
 ## Requirements
 
-PowerShell entrypoints require PowerShell 7.
+Every PowerShell entrypoint requires PowerShell 7.
 
 | Task | Additional requirements |
 | --- | --- |
 | PowerShell path live run | Windows with `ping`, `tracert`, `pathping`, and `Test-NetConnection` |
 | Bash path live run | Bash 4+, `mtr`, and `jq`; `column` unless `--no-summary` is used |
-| Throughput live run | `iperf3` 3.7 or newer and a reachable `iperf3` server |
+| Throughput live run | `iperf3` 3.7+ and a trusted or operator-controlled server |
 | Throughput GUI | Windows Forms on Windows |
 | Windows tuning verification | Windows networking cmdlets, including `Get-NetQosPolicy` |
-| Windows tuning mutation | Windows and an elevated PowerShell session |
+| Windows tuning mutation | Windows, elevation, and an independent recovery method |
+| Complete development gate | Git, Rust 1.96.0, Node.js 22+, desktop npm dependencies, ShellCheck, Bats, `jq`, PSScriptAnalyzer 1.24.0, and Pester 5.7.1; see the [native desktop prerequisites](docs/TESTING.md#rust-migration-gate) |
 
-The full development gate also requires Git, ShellCheck, Bats, `jq`,
-PSScriptAnalyzer 1.24.0, and Pester 5.7.1.
-
-## Installation
-
-Obtain a source checkout and keep its directory layout intact. Entrypoints load
-modules and helpers by paths relative to the repository root.
-
-Check development prerequisites without installing packages:
+Inspect your environment without installing anything:
 
 ```powershell
 pwsh -NoProfile -NonInteractive -File .\scripts\Test-Prerequisites.ps1
 ```
 
-Add `-IncludeIperf3` when preparing a live throughput run. This check confirms
-that `iperf3` is on `PATH`; the live command performs the version check.
+Add `-IncludeIperf3` when preparing a throughput host. The script checks that
+`iperf3` is on `PATH`; the live command enforces the minimum version.
 
-## Configuration
+## Try it without touching the network
 
-### Path targets
+Keep the checkout layout intact, because the adapters load repository-relative
+modules. Run these from the repository root. Every example below previews a plan
+and is safe to run: no probe, no throughput load, and no tuning write.
 
-`config/hosts.conf` defines the default IPv4 and IPv6 targets for both path
-entrypoints. Its format is one `ipv4=<hostname>` or `ipv6=<hostname>` entry per
-line. The checked-in file targets public third-party services. Review it or use
-explicit host arguments before a live run.
+Preview the umbrella triage workflow:
 
-### Orchestrator profile
-
-`Invoke-NetworkLantern.ps1 -ProfilePath` accepts a JSON object with these
-sections and keys:
-
-```json
-{
-  "path": {
-    "hostsIPv4": ["8.8.8.8"],
-    "hostsIPv6": [],
-    "protocols": ["IPv4"],
-    "rounds": ["Standard"]
-  },
-  "throughput": {
-    "target": "iperf3.example.net",
-    "port": 5201,
-    "protocol": "Both"
-  },
-  "windowsTuning": {
-    "action": "Verify",
-    "profile": "Safe",
-    "udpPorts": [5201],
-    "appPaths": []
-  }
-}
+```powershell
+pwsh -NoProfile -File .\Invoke-NetworkLantern.ps1 `
+  -Workflow Triage -IperfTarget iperf3.example.net -DryRun
 ```
 
-The tracked example is `profiles/example-office.json`. Profiles larger than
-1 MB are rejected. Unknown sections and keys produce warnings and are ignored.
-Explicit command-line arguments take precedence over profile values.
-
-### Throughput configuration and profiles
-
-The direct throughput command accepts a JSON configuration file through
-`-ConfigurationPath`. It also manages named profiles in
-`.iperf3/profiles.json` by default. Relative profile paths are resolved from the
-current directory. Use `-StrictConfiguration` to reject unknown or invalid
-configuration values instead of warning and ignoring them.
-
-Profile save and delete operations modify the profile store. `-SaveProfile
--WhatIf` still saves a profile, and `-DeleteProfile` is not changed by
-`-WhatIf`.
-
-The Bash path command supports two environment variables:
-
-- `LOG_DIR` changes its default output directory from `~/logs`.
-- `MTR_TIMEOUT_SECONDS` sets the positive integer timeout for each `mtr` run.
-  The default is 360 seconds.
-
-`NETWORK_LANTERN_INSTALL_MISSING_MODULES=1` allows `scripts/ci-local.sh` to
-install missing pinned PowerShell modules during its PowerShell phase.
-
-## Usage
-
-Run these examples from the repository root.
-
-Preview the PowerShell path plan:
+Preview a Windows path plan:
 
 ```powershell
 pwsh -NoProfile -File .\apps\path\Test-NetworkPath.ps1 `
@@ -178,20 +125,6 @@ pwsh -NoProfile -File .\apps\throughput\Measure-NetworkThroughput.ps1 `
   -Target iperf3.example.net -SingleTest -WhatIf
 ```
 
-`iperf3.example.net` is a reserved example hostname. Replace it with a trusted
-or operator-controlled server for a live run.
-
-Preview the umbrella triage workflow:
-
-```powershell
-pwsh -NoProfile -File .\Invoke-NetworkLantern.ps1 `
-  -Workflow Triage -IperfTarget iperf3.example.net -DryRun
-```
-
-`Triage` always runs Path and adds Throughput when `-IperfTarget` is set.
-`Baseline` runs Path followed by one throughput test and requires
-`-IperfTarget`.
-
 Preview Windows tuning without elevation:
 
 ```powershell
@@ -199,131 +132,140 @@ pwsh -NoProfile -File .\apps\windows-tuning\Invoke-NetworkPathTuning.ps1 `
   -Action Apply -TuningProfile Safe -UdpPorts 5201 -DryRun -PassThru
 ```
 
-Detailed commands are in the [path](docs/workflows/diagnose-path.md),
-[throughput](docs/workflows/diagnose-throughput.md), and
-[Windows tuning](docs/workflows/windows-tuning.md) guides.
+`iperf3.example.net` is a reserved example host, not a live server. Replace it
+with a trusted target before a live run. Throughput profile save and delete are
+the one exception to preview safety: they write even when `-WhatIf` is supplied.
 
-## Output and local state
+## Configuration and local state
 
-| Command | Default location |
+- `config/hosts.conf` provides the default IPv4 and IPv6 targets for both path
+  entrypoints. The checked-in targets are third-party public services. Review or
+  replace them before a live run.
+- `profiles/example-office.json` shows the root workflow profile format. Profiles
+  are limited to 1 MiB. Explicit command-line parameters override profile values;
+  unknown sections and keys warn and are ignored. Treat an externally supplied
+  profile as control input: inspect its resolved targets and actions in a dry run
+  before live execution.
+- Direct throughput values resolve in this order: explicit command line, JSON
+  configuration, named profile, then module defaults. Use `-StrictConfiguration`
+  to reject unknown or invalid values.
+- Direct throughput profiles default to `.iperf3/profiles.json`. Orchestrated
+  throughput uses `profiles/throughput-profiles.local.json`.
+- The Bash path command reads `LOG_DIR` and `MTR_TIMEOUT_SECONDS`; the per-command
+  timeout defaults to 360 seconds.
+- `NETWORK_LANTERN_INSTALL_MISSING_MODULES=1` lets the complete local gate install
+  its pinned PowerShell modules for the current user. It never installs operating
+  system packages.
+
+Default output and mutable-state locations:
+
+| Operation | Default location |
 | --- | --- |
-| Direct PowerShell or Bash path command | `~/logs` |
-| Direct throughput command | `./logs` |
-| Orchestrated path and throughput commands | `artifacts/path` and `artifacts/throughput`, or the same children under `-OutRoot` |
+| Direct PowerShell or Bash path run | `~/logs` |
+| Direct throughput run | `./logs` |
+| Root workflow path and throughput artifacts | `artifacts/path` and `artifacts/throughput`, or the same children under `-OutRoot` |
 | Direct throughput profile store | `.iperf3/profiles.json` |
-| Orchestrated throughput profile store | `profiles/throughput-profiles.local.json` |
+| Root workflow throughput profile store | `profiles/throughput-profiles.local.json` |
 | Windows tuning backup | `%ProgramData%\NetworkLantern`, or `-BackupFolder` |
 
-Path, throughput, and tuning previews do not create result or backup
-directories. The throughput profile-management exceptions are described in
-[Configuration](#throughput-configuration-and-profiles).
+> [!WARNING]
+> Generated output can contain internal hostnames, addresses, routes, local
+> paths, usernames, and machine details. Use an operator-controlled private
+> output directory with appropriate filesystem permissions, and review every
+> artifact before sharing it. Ignored files are not safe to publish by default.
 
-## Repository structure
+## Capabilities and entrypoints
 
-```text
-.github/                         Issue templates, pull request template, and CI
-apps/path/                       Path diagnostic entrypoints
-apps/throughput/                 Throughput CLI and Windows Forms entrypoints
-apps/windows-tuning/             Windows tuning CLI
-config/                          Shared default path targets
-docs/                            Architecture, workflow, verification, and migration guides
-profiles/                        Orchestrator profile example
-scripts/                         Test, lint, prerequisite, and wrapper scripts
-src/bash/path/                   Explicit MTR package loader, application, and libraries
-src/powershell/path/             NetworkLantern.Path module
-src/powershell/throughput/       NetworkLantern.Throughput module with Public/Private boundaries
-src/powershell/windows-tuning/   NetworkLantern.WindowsTuning module
-src/powershell/workflow/         NetworkLantern.Workflow module
-tests/                           Bats and Pester suites
-Invoke-NetworkLantern.ps1        PowerShell workflow orchestrator
-Makefile                         Local lint and test shortcuts
-PSScriptAnalyzerSettings.psd1    PowerShell analysis settings
-VERSION                          Repository version candidate
-```
+| Surface | Purpose | Runtime | Guide |
+| --- | --- | --- | --- |
+| `Invoke-NetworkLantern.ps1` | Compose `Triage`, `Path`, `Throughput`, `Baseline`, or `WindowsTuning` plans | PowerShell 7; runs trusted capability adapters in isolated child processes | [Architecture](docs/architecture.md#workflow-composition) |
+| `apps/path/Test-NetworkPath.ps1` | Run Windows path probes | Windows for live runs; portable dry-run planning | [Path diagnostics](docs/workflows/diagnose-path.md) |
+| `apps/path/test-network-path.sh` | Run an `mtr` matrix and write machine-readable and text logs | Bash 4+, `mtr`, and `jq`; independent of the PowerShell path tool | [Path diagnostics](docs/workflows/diagnose-path.md) |
+| `apps/throughput/` | Run `iperf3` tests, manage profiles, compare summaries, or use the Windows Forms client | PowerShell 7 and `iperf3` 3.7+; GUI requires Windows | [Throughput diagnostics](docs/workflows/diagnose-throughput.md) |
+| `apps/windows-tuning/Invoke-NetworkPathTuning.ps1` | Verify, preview, back up, apply, or restore supported Windows settings | Windows; real Backup, Apply, and Restore require elevation | [Windows tuning](docs/workflows/windows-tuning.md) |
+| `site/` | Generate example commands in a static browser interface | Static HTML, CSS, and JavaScript; never runs probes or persists input | [Static planner](#screenshot-tour) |
+| `crates/` and `desktop/` | Rust CLI and Tauri desktop under active migration | Rust 1.96.0; in development alongside the behavior reference | [Rust application](docs/RUST.md) |
 
-## Development workflow
+The Rust CLI and desktop are being built alongside the existing implementation.
+The existing code stays the behavior reference until the migration acceptance
+checks pass, so treat the Rust surfaces as in-progress.
 
-Use a topic branch based on `main`. Keep operator entrypoints thin, place
-behavior in its owning capability under `src/`, and organize tests by
-capability. Update the relevant workflow guide when behavior, configuration,
-or output changes.
+## Repository layout
 
-Run the complete local gate from Bash, Git Bash, or WSL:
+| Path | Responsibility |
+| --- | --- |
+| `apps/` | Stable operator-facing adapters and workflow child transport |
+| `src/bash/path/` | MTR path package, with `load.sh` as its only composition root |
+| `src/powershell/path/` | Windows path module |
+| `src/powershell/throughput/` | iperf3 module and public API |
+| `src/powershell/windows-tuning/` | Optional Windows verification, backup, apply, and restore module |
+| `src/powershell/workflow/` | Pure profile and ordered workflow-plan builder |
+| `site/` | Static command planner |
+| `scripts/` | Development, verification, and shell wrappers; not a product API |
+| `tests/` | Capability behavior suites and repository architecture checks |
+| `crates/`, `desktop/` | Rust workspace and Tauri desktop client (migration in progress) |
+
+See [docs/architecture.md](docs/architecture.md) for component ownership,
+dependency direction, runtime flows, and security boundaries.
+
+## Development and testing
+
+The authoritative gate is:
 
 ```bash
 ./scripts/ci-local.sh
 ```
 
-Run the PowerShell-only gate without installing dependencies:
+It runs ShellCheck, Bats, the secret-pattern and project-identity checks,
+PSScriptAnalyzer, and every Pester suite, then the Rust and desktop checks. It
+uses controlled fakes and dry-run paths rather than live probes or Windows
+mutation.
 
-```powershell
-pwsh -NoProfile -NonInteractive -File .\scripts\ci.ps1 -NoInstall
+Narrower checks while iterating:
+
+```bash
+make lint
+make test-bash
+make test-pwsh
+make test
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for branch, test, and documentation
-requirements.
+There is no separate packaging, release, or deployment command. See
+[docs/TESTING.md](docs/TESTING.md) for the exact gate, focused tests, CI coverage,
+and known verification gaps. Contribution workflow and review requirements are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Testing
+## Documentation
 
-The complete gate runs ShellCheck, Bats, a repository secret-pattern scan,
-the project identity check, PSScriptAnalyzer, and Pester. Tests use mocks and
-dry-run paths for network and Windows tuning behavior. They do not run live
-network probes or real Windows tuning changes.
+- [Architecture](docs/architecture.md)
+- [Testing and verification](docs/TESTING.md)
+- [Rust application](docs/RUST.md)
+- [Path diagnostics](docs/workflows/diagnose-path.md)
+- [Throughput diagnostics](docs/workflows/diagnose-throughput.md)
+- [Windows tuning](docs/workflows/windows-tuning.md)
+- Migration from the
+  [Network Diagnostics Suite](docs/migration/from-network-diagnostics-suite.md),
+  [MTR suite](docs/migration/from-mtr-test-suite.md),
+  [iperf3 suite](docs/migration/from-iperf3-test-suite.md), or
+  [Windows tuning tool](docs/migration/from-windows-udp-jitter-optimization.md)
+- [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 
-GitHub Actions runs the cross-shell gate on Ubuntu and the PowerShell gate on
-Ubuntu and Windows for pushes and pull requests targeting `main`.
+## Safety and operating limits
 
-See [docs/verification.md](docs/verification.md) for exact dependencies,
-focused test commands, and current verification gaps.
+- Run diagnostics only against systems and services you are authorized to test.
+  The default path configuration contacts public services.
+- Throughput tests can consume substantial bandwidth. A default full matrix can
+  plan up to 1,145 tests when `iperf3` supports bidirectional mode; preview and
+  restrict the matrix first.
+- Direct Linux and macOS throughput runs require `-SkipReachabilityCheck
+  -DisableMtuProbe`. The root workflow does not expose those switches, so its live
+  throughput steps currently require Windows.
+- Real Windows tuning Backup, Apply, and Restore change system state. Run them
+  only from a trusted checkout with a trusted executable search path. Their
+  validation paths are tested, but an elevated apply-and-restore cycle has not
+  been verified on a disposable Windows VM for this revision.
 
-## Deployment and operation
-
-There is no deployment step. Run the selected entrypoint from a source
-checkout on the host being diagnosed. For repeatable collection, use explicit
-targets, protocols, rounds, output paths, and throughput parameters. Preserve
-the generated files together when comparing runs.
-
-Run diagnostics only against systems and services you are authorized to test.
-The default path configuration contacts public services. Throughput tests can
-consume substantial bandwidth, and the default matrix can run for a long time.
-
-## Troubleshooting
-
-- If the prerequisite check reports missing ShellCheck, Bats, or `jq`, install
-  them in the same Bash environment used for `scripts/ci-local.sh`.
-- If `scripts/ci.ps1 -NoInstall` reports missing PowerShell modules, run it
-  once without `-NoInstall` to install the pinned versions for the current
-  user.
-- Use the Bash path command for live path diagnostics on non-Windows systems.
-- On Linux or macOS, add `-SkipReachabilityCheck -DisableMtuProbe` to a direct
-  live throughput command. The TCP port check still runs.
-- A Windows tuning `Apply`, `Backup`, or `Restore` fails without elevation.
-  `Verify` and `-DryRun` do not require elevation.
-- If a Bash summary fails because `column` is missing, rerun with
-  `--no-summary`.
-- Keep Bash and Bats files LF-normalized. When staging a new Bash entrypoint
-  from Windows, record executable mode `100755`.
-
-## Security considerations
-
-Diagnostic output can contain internal hostnames, IP addresses, routes, local
-paths, usernames, and machine details. Throughput profiles and tuning backups
-can also contain sensitive operational data. Git ignores the documented local
-output paths, but ignored files still require review before sharing.
-
-Windows tuning writes registry values, QoS policies, NIC properties, and the
-active power plan. Preview the action first, keep a verified backup outside a
-sensitive system directory, and use real mutation only on a system with a
-tested recovery path.
-
-Report vulnerabilities according to [SECURITY.md](SECURITY.md). Do not put
-credentials, exploit details, or unsanitized diagnostics in a public issue.
-
-## Contributing
-
-Before opening a pull request, run the complete gate, inspect
-`git status --short`, and review every file that would be published. Follow
-[CONTRIBUTING.md](CONTRIBUTING.md) for focused tests, code boundaries, and
-documentation updates.
+See [SECURITY.md](SECURITY.md) for the trust model and reporting process.
 
 Network Lantern is licensed under the [MIT License](LICENSE).

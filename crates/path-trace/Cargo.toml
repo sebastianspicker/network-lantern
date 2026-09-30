@@ -1,0 +1,17 @@
+[package]
+name = "lantern-path-trace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lantern-packet = { path = "../packet" }
+lantern-path-io = { path = "../path-io" }
+serde.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper"] }

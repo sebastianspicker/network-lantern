@@ -1,6 +1,6 @@
 # Migrating from iperf3-test-suite
 
-The throughput implementation is now the `NetworkLantern.Throughput` module.
+Throughput now lives in the `NetworkLantern.Throughput` module.
 
 | Previous surface | Current surface |
 | --- | --- |
@@ -13,12 +13,12 @@ Direct named profiles default to `.iperf3/profiles.json`. The orchestrator uses
 `profiles/throughput-profiles.local.json` internally and does not expose profile
 save, load, list, or delete operations.
 
-Use `-WhatIf` for a direct plan preview or umbrella `-DryRun` through the
+Use `-WhatIf` for a direct plan preview, or umbrella `-DryRun` through the
 orchestrator. A normal plan preview makes no connection and creates no result
-files. Profile management is different: `-SaveProfile -WhatIf` writes the
-profile, and `-DeleteProfile` changes the store.
+files. Profile management is different: `-SaveProfile -WhatIf` writes the profile,
+and `-DeleteProfile` changes the store.
 
-Live Linux and macOS runs require the direct entrypoint with both
+Live Linux and macOS runs need the direct entrypoint with both
 `-SkipReachabilityCheck` and `-DisableMtuProbe`. The TCP server-port check still
 runs.
 

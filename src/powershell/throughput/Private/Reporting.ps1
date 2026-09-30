@@ -1,5 +1,69 @@
 # Report and summary helpers (private to NetworkLantern.Throughput)
 
+function Invoke-Iperf3AtomicReplace {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$SourcePath,
+    [Parameter(Mandatory)][string]$DestinationPath
+  )
+  [System.IO.File]::Move($SourcePath, $DestinationPath, $true)
+}
+
+function Get-Iperf3AtomicTempPath {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Path)
+  $directory = Split-Path -Parent $Path
+  $tempName = ".{0}.{1}.tmp" -f ([System.IO.Path]::GetFileName($Path)), ([guid]::NewGuid().ToString('N'))
+  return Join-Path -Path $directory -ChildPath $tempName
+}
+
+function Invoke-Iperf3AtomicTempWrite {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][System.IO.FileStream]$Stream,
+    [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes
+  )
+  $Stream.Write($Bytes, 0, $Bytes.Length)
+  $Stream.Flush($true)
+}
+
+function Set-Iperf3TextFileAtomic {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  [OutputType([void])]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$Text
+  )
+  if (-not $PSCmdlet.ShouldProcess($Path, 'Write text file atomically')) { return }
+
+  $tempPath = Get-Iperf3AtomicTempPath -Path $Path
+  $stream = $null
+  $ownsTemp = $false
+  try {
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($Text)
+    $stream = [System.IO.File]::Open(
+      $tempPath,
+      [System.IO.FileMode]::CreateNew,
+      [System.IO.FileAccess]::Write,
+      [System.IO.FileShare]::None
+    )
+    $ownsTemp = $true
+    Invoke-Iperf3AtomicTempWrite -Stream $stream -Bytes $bytes
+    $stream.Dispose()
+    $stream = $null
+    Invoke-Iperf3AtomicReplace -SourcePath $tempPath -DestinationPath $Path
+    $ownsTemp = $false
+    $tempPath = $null
+  }
+  finally {
+    if ($stream) { $stream.Dispose() }
+    if ($ownsTemp -and $tempPath -and (Test-Path -LiteralPath $tempPath)) {
+      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 function Set-Iperf3JsonFileAtomic {
   [CmdletBinding(SupportsShouldProcess = $true)]
   [OutputType([void])]
@@ -9,22 +73,11 @@ function Set-Iperf3JsonFileAtomic {
     [Parameter(Mandatory)]
     [object]$InputObject
   )
-  $directory = Split-Path -Parent $Path
-  $tempName = ".{0}.{1}.tmp" -f ([System.IO.Path]::GetFileName($Path)), ([guid]::NewGuid().ToString('N'))
-  $tempPath = Join-Path -Path $directory -ChildPath $tempName
   if (-not $PSCmdlet.ShouldProcess($Path, 'Write JSON file atomically')) {
     return
   }
-  try {
-    $InputObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $tempPath -Encoding UTF8 -NoNewline
-    [System.IO.File]::Move($tempPath, $Path, $true)
-    $tempPath = $null
-  }
-  finally {
-    if ($tempPath -and (Test-Path -LiteralPath $tempPath)) {
-      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-    }
-  }
+  $json = $InputObject | ConvertTo-Json -Depth 10
+  Set-Iperf3TextFileAtomic -Path $Path -Text $json
 }
 
 function Build-RunSummary {
@@ -240,7 +293,8 @@ function Write-Iperf3SupplementalReports {
   [void]$lines.Add("- Summary JSON: $summaryDisplay")
   [void]$lines.Add("- This report: $reportPath")
   try {
-    Set-Content -LiteralPath $reportPath -Encoding UTF8 -Value ($lines -join [Environment]::NewLine)
+    $markdown = ($lines -join [Environment]::NewLine) + [Environment]::NewLine
+    Set-Iperf3TextFileAtomic -Path $reportPath -Text $markdown
   } catch {
     Write-Warning "Failed to write report markdown: $_"
     $reportPath = $null

@@ -9,7 +9,7 @@ setup() {
 @test "loads repository host config unless a CLI host override is provided" {
   run_path_app --types ICMP4 --rounds Standard --dry-run --no-summary
   [ "$status" -eq 0 ]
-  [[ "$output" == *"IPv4 hosts: cloudflare.com google.com wikipedia.org amazon.de"* ]]
+  [[ "$output" == *"IPv4 hosts: cloudflare.com google.com wikipedia.org amazon.com"* ]]
   [[ "$output" == *"Planned runs: 4"* ]]
 
   run_path_app --types ICMP4 --rounds Standard --hosts4 override.example --dry-run --no-summary

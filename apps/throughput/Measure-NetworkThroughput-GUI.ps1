@@ -29,9 +29,13 @@ $script:RunJobTerminalRecords = @()
 $script:RunCancellationRequested = $false
 $script:DeferredRunJobs = @()
 $script:LastRunSummary = $null
+$script:LastPlanPreview = $null
 $script:RunStartTime = $null
+$script:RunIsPreview = $false
 
 $privateDirectory = Join-Path $PSScriptRoot 'Private'
+. (Join-Path $privateDirectory 'GuiBudget.ps1')
+. (Join-Path $privateDirectory 'GuiPresentation.ps1')
 . (Join-Path $privateDirectory 'GuiFormHelpers.ps1')
 . (Join-Path $privateDirectory 'GuiRunLifecycle.ps1')
 . (Join-Path $privateDirectory 'GuiProfiles.ps1')
@@ -61,7 +65,7 @@ $btnWhatIf.Add_Click({
 })
 
 $btnCancel.Add_Click({
-  $released = Stop-CurrentRunJob -Timer $timer -StatusLabel $statusLabel
+  $released = Stop-CurrentRunJob -Timer $timer -StatusLabel $statusLabel -Form $form
   if ($released) {
     $progressBar.Value = 0
     Update-UiBusyState -Form $form -Busy $false
@@ -85,7 +89,7 @@ $listProfiles.Add_SelectedIndexChanged({
 $form.Add_FormClosing({
   param($formSender, $formEventArgs)
   $null = $formSender
-  $released = Stop-CurrentRunJob -Timer $timer -StatusLabel $statusLabel
+  $released = Stop-CurrentRunJob -Timer $timer -StatusLabel $statusLabel -Form $form
   if (-not $released) {
     $formEventArgs.Cancel = $true
     Update-UiBusyState -Form $form -Busy $true
@@ -98,7 +102,7 @@ Update-ProfilesList -Form $form
 [void]$form.ShowDialog()
 
 if ($script:RunJob) {
-  $null = Stop-CurrentRunJob -Timer $timer -StatusLabel $statusLabel
+  $null = Stop-CurrentRunJob -Timer $timer -StatusLabel $statusLabel -Form $form
 }
 if (-not $script:RunJob) {
   Clear-RunCancellationContext

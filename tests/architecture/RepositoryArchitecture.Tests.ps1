@@ -120,6 +120,25 @@ Describe 'Repository architecture boundaries' {
     }
   }
 
+  It 'keeps the throughput budget contract aligned across workflow and capability boundaries' {
+    Import-Module (Join-Path $script:RepoRoot 'src/powershell/workflow/NetworkLantern.Workflow/NetworkLantern.Workflow.psd1') -Force
+    Import-Module (Join-Path $script:RepoRoot 'src/powershell/throughput/NetworkLantern.Throughput.psd1') -Force
+    $surfaces = @(
+      @{ Command = (Join-Path $script:RepoRoot 'Invoke-NetworkLantern.ps1'); Parameter = 'ThroughputMaxTotalTests' }
+      @{ Command = 'New-NetworkLanternWorkflowPlan'; Parameter = 'ThroughputMaxTotalTests' }
+      @{ Command = (Join-Path $script:RepoRoot 'apps/throughput/Measure-NetworkThroughput.ps1'); Parameter = 'MaxTotalTests' }
+      @{ Command = 'Measure-NetworkThroughput'; Parameter = 'MaxTotalTests' }
+    )
+    foreach ($surface in $surfaces) {
+      $parameter = (Get-Command $surface.Command).Parameters[$surface.Parameter]
+      $parameter.ParameterType | Should -Be ([int])
+      $range = @($parameter.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateRangeAttribute] })
+      $range.Count | Should -Be 1
+      $range[0].MinRange | Should -Be 0
+      $range[0].MaxRange | Should -Be 1000000
+    }
+  }
+
   It 'keeps capability modules independent from app and development-script layers' {
     $moduleFiles = Get-ChildItem -LiteralPath (Join-Path $script:RepoRoot 'src/powershell') -Recurse -File -Include '*.ps1', '*.psm1'
     $prohibitedModuleReferences = [ordered]@{
@@ -200,32 +219,34 @@ Describe 'Repository architecture boundaries' {
     }
   }
 
-  It 'preserves executable Git modes for shell entrypoints' {
+  It 'marks exactly the directly invoked shell scripts executable in Git' {
     $expected = @(
       'apps/path/test-network-path.sh'
+      'scripts/ci-legacy.sh'
       'scripts/ci-local.sh'
+      'scripts/ci-rust.sh'
       'scripts/install-test-deps.sh'
+      'scripts/prepare-macos-app.sh'
       'scripts/run-workflow.sh'
     )
-    $modeByPath = @{}
-    & git -C $script:RepoRoot ls-files --stage -- @expected | ForEach-Object {
-      if ($_ -match '^(?<mode>\d+)\s+\S+\s+\d+\s+(?<path>.+)$') {
-        $modeByPath[$Matches.path] = $Matches.mode
+    $executable = @(
+      & git -C $script:RepoRoot ls-files --stage | ForEach-Object {
+        if ($_ -match '^100755\s+\S+\s+\d+\s+(?<path>.+)$') { $Matches.path }
       }
-    }
+    )
     $LASTEXITCODE | Should -Be 0
 
-    foreach ($relativePath in $expected) {
-      $modeByPath[$relativePath] | Should -Be '100755'
-    }
+    ($executable | Sort-Object) -join "`n" | Should -Be (($expected | Sort-Object) -join "`n")
   }
 
   It 'keeps the static planner honest about its non-executing boundary' {
     $html = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'site/index.html') -Raw
-    $javascript = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'site/app.js') -Raw
+    $javascript = (Get-ChildItem -LiteralPath (Join-Path $script:RepoRoot 'site') -Filter '*.js' -File | Get-Content -Raw) -join "`n"
 
     $html | Should -Match '(?i)(no commands run|makes no network probes)'
-    $javascript | Should -Match 'Invoke-NetworkLantern\.ps1'
-    $javascript | Should -Not -Match '(?i)\b(fetch|WebSocket|EventSource|sendBeacon|indexedDB|localStorage|sessionStorage)\b'
+    $html | Should -Not -Match '(?i)<form\b'
+    $javascript | Should -Match 'network-lantern workflow'
+    $javascript | Should -Not -Match 'Invoke-NetworkLantern\.ps1'
+    $javascript | Should -Not -Match '(?i)\b(fetch|WebSocket|EventSource|sendBeacon|XMLHttpRequest|indexedDB|localStorage|sessionStorage|serviceWorker)\b'
   }
 }

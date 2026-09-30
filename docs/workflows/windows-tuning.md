@@ -1,7 +1,7 @@
 # Windows tuning
 
-Windows tuning is optional. Path and throughput diagnostics do not depend on
-it. Use verification and dry-run planning before considering a state change.
+Windows tuning is optional. Path and throughput diagnostics do not depend on it.
+Verify and preview before you consider changing any state.
 
 ## Actions
 
@@ -12,8 +12,8 @@ it. Use verification and dry-run planning before considering a state change.
 | `Apply` | Backs up current state, verifies the backup, then applies the selected profile | Yes, except `-DryRun` |
 | `Restore` | Validates and restores a prior backup | Yes, except `-DryRun` |
 
-The CLI exits 0 when its structured result reports success and 1 otherwise.
-Add `-PassThru` to return the structured result to the pipeline.
+The CLI exits 0 when its structured result reports success and 1 otherwise. Add
+`-PassThru` to return the structured result to the pipeline.
 
 ## Profiles
 
@@ -22,10 +22,10 @@ Add `-PassThru` to return the structured result to the pipeline.
 | `Safe` | Enables local QoS marking and creates requested UDP port or application DSCP policies |
 | `Measured` | Applies `Safe`, disables supported NIC power-saving properties, and selects the High Performance power plan by default |
 
-The profile names describe two comparison sets. They do not guarantee a
-latency or throughput improvement. See the
-[tuning evidence matrix](../evidence/tuning-matrix.md) for the exact included
-and excluded settings.
+The profile names describe two comparison sets, not a promise. They do not
+guarantee a latency or throughput improvement. See the
+[tuning evidence matrix](../evidence/tuning-matrix.md) for the exact included and
+excluded settings.
 
 ## Preview
 
@@ -36,14 +36,16 @@ pwsh -NoProfile -File .\apps\windows-tuning\Invoke-NetworkPathTuning.ps1 `
   -Action Apply -TuningProfile Safe -UdpPorts 5201 -DryRun -PassThru
 ```
 
-`-DryRun` validates inputs and prints planned operations. It does not require
-elevation or write a backup, registry value, QoS policy, NIC property, or power
-plan.
+`-DryRun` validates the values needed to build a plan and prints the planned
+operations. It does not require elevation and does not write a backup, registry
+value, QoS policy, NIC property, or power plan. Live execution can apply extra
+validation to application paths and hardware-specific settings, so a successful
+preview does not prove that Apply will succeed.
 
-A `Measured` preview attempts to enumerate active physical adapters. If that
-enumeration is unavailable, the command can return `Success = True` while
-reporting `NicPowerSaving` as `Skipped`. Inspect `Components`, `Warnings`, and
-the warning stream.
+A `Measured` preview tries to enumerate active physical adapters. If enumeration
+is unavailable, the command can return `Success = True` while reporting
+`NicPowerSaving` as `Skipped`. Check `Components`, `Warnings`, and the warning
+stream.
 
 ## Verify
 
@@ -60,13 +62,13 @@ cannot be enumerated. It does not verify NIC or power-plan state.
 
 ## Backup and apply
 
-The default backup folder is `%ProgramData%\NetworkLantern`. Use
-`-BackupFolder` to choose another trusted path.
+The default backup folder is `%ProgramData%\NetworkLantern`. Use `-BackupFolder`
+to choose another trusted path.
 
 On first use, the module validates the existing `%ProgramData%` ancestor for
-SYSTEM ownership, safe ACL semantics, and reparse-point takeover before it
-creates the `NetworkLantern` child with an exact Administrators/SYSTEM-only
-ACL. Custom folders still require an already trusted private parent.
+SYSTEM ownership, safe ACL semantics, and reparse-point takeover. It then creates
+the `NetworkLantern` child with an exact Administrators/SYSTEM-only ACL. Custom
+folders still require an already trusted private parent.
 
 Back up the supported state:
 
@@ -83,14 +85,13 @@ pwsh -NoProfile -File .\apps\windows-tuning\Invoke-NetworkPathTuning.ps1 `
   -BackupFolder 'C:\ProgramData\NetworkLantern' -PassThru
 ```
 
-Apply creates the backup before mutation. The command refuses to continue if
+Apply creates the backup before it changes anything. It refuses to continue if
 the backup status, manifest, expected artifacts, digests, or path-trust checks
 fail.
 
 Backup folders classified as sensitive system paths are rejected.
-`-AllowUnsafeBackupFolder` bypasses that location check only. It does not
-bypass elevation, manifest validation, artifact validation, or restore trust
-checks.
+`-AllowUnsafeBackupFolder` bypasses that location check only. It does not bypass
+elevation, manifest validation, artifact validation, or restore trust checks.
 
 ## Application policies
 
@@ -105,7 +106,7 @@ pwsh -NoProfile -File .\apps\windows-tuning\Invoke-NetworkPathTuning.ps1 `
 
 The orchestrator exposes both CLI parameters. Its JSON workflow profile accepts
 `appPaths`, but it has no profile key for `IncludeAppPolicies`; pass the switch
-explicitly when application policies are required.
+explicitly when you need application policies.
 
 ## Restore
 
@@ -129,17 +130,21 @@ Restore rejects missing, malformed, duplicate-key, incompatible-newer, or
 untrusted manifests. It also rejects missing required artifacts, digest
 mismatches, reparse-point backup paths, replaced staging directories, and
 registry, QoS, NIC, RSC, or power-plan content outside the module's managed
-schemas and scope. Approved artifacts are copied to protected staging and
-checked again before each restore component.
+schemas and scope. Approved artifacts are copied to protected staging and checked
+again before each restore component.
 
-Digests provide bundle integrity, not authenticated provenance. Restore only a
-locally created backup retained under trusted access control. An imported or
-transferred bundle requires an independent provenance check before use.
+If managed-QoS policy inventory fails, the QoS component returns `Warn` without
+creating or removing policies. The public restore result is unsuccessful and the
+CLI exits 1; read its warnings before you attempt recovery again.
 
-When no explicit backup folder is supplied, Restore can use the previous
-default backup location if the current default has no manifest and the previous
-location does. Current validation still applies. The exact compatibility path
-is documented in the
+Digests prove bundle integrity, not authentic provenance. Restore only a locally
+created backup kept under trusted access control. An imported or transferred
+bundle needs an independent provenance check first.
+
+When you do not pass an explicit backup folder, Restore can fall back to the
+previous default backup location if the current default has no manifest and the
+previous location does. Current validation still applies. The exact compatibility
+path is documented in the
 [migration guide](../migration/from-network-diagnostics-suite.md).
 
 The elevated apply and restore cycle has not been completed on a disposable
@@ -151,8 +156,8 @@ restore behavior.
 
 - Run `Verify` on Windows with the NetQosPolicy cmdlets available.
 - Use `-DryRun` to check input and plan construction without elevation.
-- A successful dry run does not prove that every adapter-specific setting can
-  be changed on the target hardware.
-- Do not edit a rejected manifest or backup artifact to force restore. Create a
-  new backup or investigate the reported validation error.
+- A successful dry run does not prove that every adapter-specific setting can be
+  changed on the target hardware.
+- Do not edit a rejected manifest or backup artifact to force a restore. Create a
+  new backup, or investigate the reported validation error.
 - Use real mutation only on a host with a tested recovery path.

@@ -134,7 +134,7 @@ function Get-Iperf3ProfileStorableKeys {
     'Target', 'Port', 'Duration', 'Omit', 'OutDir', 'Quiet', 'Progress', 'Summary',
     'DisableMtuProbe', 'SkipReachabilityCheck', 'Force', 'Protocol', 'SingleTest', 'MtuSizes',
     'ConnectTimeoutMs', 'UdpStart', 'UdpMax', 'UdpStep', 'UdpLossThreshold',
-    'TcpStreams', 'TcpWindows', 'DscpClasses', 'IpVersion', 'RetryCount',
+    'TcpStreams', 'TcpWindows', 'DscpClasses', 'IpVersion', 'RetryCount', 'MaxTotalTests',
     'ThresholdMinThroughputMbps', 'ThresholdMaxLossPct', 'ThresholdMaxJitterMs'
   )
 }

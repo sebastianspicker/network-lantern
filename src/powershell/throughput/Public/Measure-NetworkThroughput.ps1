@@ -34,6 +34,7 @@ function Measure-NetworkThroughput {
     [ValidateSet('TCP', 'UDP', 'Both')] [string]$Protocol = 'Both',
     [switch]$SingleTest,
     [ValidateRange(0, 5)] [int]$RetryCount = 0,
+    [ValidateRange(0, 1000000)] [int]$MaxTotalTests = 0,
     [switch]$Force,
     [switch]$WhatIf,
     [string]$ProfileName,
@@ -112,15 +113,20 @@ function Measure-NetworkThroughput {
       }
     }
     if ([bool]$effective['SingleTest'] -and @($effective['DscpClasses']).Count -eq 0) { Write-Iperf3Error -Message "At least one DSCP class is required. When using -SingleTest, ensure DscpClasses contains at least one value (e.g. 'CS0')." -ErrorId 'NetworkLantern.Throughput.InputValidation' }
-    $plan = Build-TestPlan -SingleTest:([bool]$effective['SingleTest']) -Protocol ([string]$effective['Protocol']) -DscpClasses @($effective['DscpClasses']) -TcpStreams @($effective['TcpStreams']) -TcpWindows @($effective['TcpWindows']) -Caps $caps -UdpStart ([string]$effective['UdpStart']) -UdpMax ([string]$effective['UdpMax']) -UdpStep ([string]$effective['UdpStep'])
+    $plan = Build-TestPlan -SingleTest:([bool]$effective['SingleTest']) -Protocol ([string]$effective['Protocol']) -DscpClasses @($effective['DscpClasses']) -TcpStreams @($effective['TcpStreams']) -TcpWindows @($effective['TcpWindows']) -Caps $caps -UdpStart ([string]$effective['UdpStart']) -UdpMax ([string]$effective['UdpMax']) -UdpStep ([string]$effective['UdpStep']) -Duration ([int]$effective['Duration']) -Omit ([int]$effective['Omit']) -MaxTotalTests ([int]$effective['MaxTotalTests'])
     if ([bool]$effective['WhatIf']) {
       if (-not $effective['Quiet']) {
         Write-Information -InformationAction Continue "WhatIf: Would run approximately $($plan.TotalApprox) tests. Target: $($effective['Target']) Port: $($effective['Port']) Protocol: $($effective['Protocol'])."
+        Write-Information -InformationAction Continue "Nominal estimated test time: $($plan.EstimatedTestSeconds)s (excludes setup and retries; UDP saturation may stop early). MaxTotalTests: $($plan.MaxTotalTests). Within budget: $($plan.WithinTestBudget)."
         Write-Information -InformationAction Continue "CSV  : $csvPath"
         Write-Information -InformationAction Continue "JSON : $jsonPath"
       }
-      if ($effective['PassThru']) { return [pscustomobject]@{ Mode = 'WhatIf'; TotalApprox = $plan.TotalApprox; CsvPath = $csvPath; JsonPath = $jsonPath; EffectiveParameters = $effective } }
+      if ($effective['PassThru']) { return [pscustomobject]@{ Mode = 'WhatIf'; TotalApprox = $plan.TotalApprox; EstimatedTestSeconds = $plan.EstimatedTestSeconds; MaxTotalTests = $plan.MaxTotalTests; WithinTestBudget = $plan.WithinTestBudget; CsvPath = $csvPath; JsonPath = $jsonPath; EffectiveParameters = $effective } }
       return
+    }
+
+    if (-not $plan.WithinTestBudget) {
+      Write-Iperf3Error -Message "Planned test count $($plan.TotalApprox) exceeds MaxTotalTests $($plan.MaxTotalTests). Increase MaxTotalTests or reduce the test matrix." -ErrorId 'NetworkLantern.Throughput.InputValidation' -TargetObject $plan.TotalApprox
     }
 
     $null = New-Item -ItemType Directory -Path $effective['OutDir'] -Force

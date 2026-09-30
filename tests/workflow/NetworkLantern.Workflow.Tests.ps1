@@ -197,6 +197,69 @@ Describe 'Network Lantern workflow module' {
     (Test-Path -LiteralPath (Join-Path $TestDrive 'plan-artifacts')) | Should -BeFalse
   }
 
+  It 'validates profile values after explicit-over-profile precedence is resolved' {
+    $profilePath = Join-Path $TestDrive 'overridden-invalid-profile.json'
+    & $script:WriteUtf8File -Path $profilePath -Content '{"throughput":{"target":42,"port":70000,"protocol":"SCTP","maxTotalTests":1000001}}'
+
+    $plan = New-NetworkLanternWorkflowPlan -Workflow Throughput -ProfilePath $profilePath `
+      -IperfTarget 'explicit.example' -IperfPort 5202 -ThroughputProtocol TCP -ThroughputMaxTotalTests 25 `
+      -OutRoot $TestDrive -ExplicitParameters @{
+        Workflow = 'Throughput'; IperfTarget = 'explicit.example'; IperfPort = 5202
+        ThroughputProtocol = 'TCP'; ThroughputMaxTotalTests = 25
+      }
+
+    $plan.Steps[0].Parameters.Target | Should -Be 'explicit.example'
+    $plan.Steps[0].Parameters.Port | Should -Be 5202
+    $plan.Steps[0].Parameters.Protocol | Should -Be 'TCP'
+    $plan.Steps[0].Parameters.MaxTotalTests | Should -Be 25
+  }
+
+  It 'rejects invalid resolved profile values before constructing a child plan' -TestCases @(
+    @{ Json = '{"path":{"protocols":["IPv5"]}}'; Expected = 'path.protocols' }
+    @{ Json = '{"throughput":{"target":42}}'; Expected = 'throughput.target' }
+    @{ Json = '{"throughput":{"port":70000}}'; Expected = 'throughput.port' }
+    @{ Json = '{"throughput":{"protocol":"SCTP"}}'; Expected = 'throughput.protocol' }
+    @{ Json = '{"throughput":{"maxTotalTests":1000001}}'; Expected = 'throughput.maxTotalTests' }
+    @{ Json = '{"windowsTuning":{"action":"Reset"}}'; Expected = 'windowsTuning.action' }
+    @{ Json = '{"windowsTuning":{"profile":"Fast"}}'; Expected = 'windowsTuning.profile' }
+    @{ Json = '{"windowsTuning":{"udpPorts":[-1]}}'; Expected = 'windowsTuning.udpPorts' }
+  ) {
+    param($Json, $Expected)
+
+    $profilePath = Join-Path $TestDrive ("invalid-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    & $script:WriteUtf8File -Path $profilePath -Content $Json
+
+    {
+      New-NetworkLanternWorkflowPlan -Workflow Path -ProfilePath $profilePath -OutRoot $TestDrive `
+        -ExplicitParameters @{ Workflow = 'Path'; ProfilePath = $profilePath }
+    } | Should -Throw "*$Expected*"
+  }
+
+  It 'maps the trusted workflow throughput budget from a profile to MaxTotalTests' {
+    $profilePath = Join-Path $TestDrive 'throughput-budget.json'
+    & $script:WriteUtf8File -Path $profilePath -Content '{"throughput":{"target":"iperf3.example.net","maxTotalTests":321}}'
+
+    $plan = New-NetworkLanternWorkflowPlan -Workflow Throughput -ProfilePath $profilePath -OutRoot $TestDrive `
+      -ExplicitParameters @{ Workflow = 'Throughput'; ProfilePath = $profilePath }
+    . (Join-Path $script:RepoRoot 'apps/workflow/Private/WorkflowApplication.ps1')
+    $descriptor = Test-NetworkLanternWorkflowCapabilityStep -Step $plan.Steps[0]
+
+    $plan.Steps[0].Parameters.MaxTotalTests.GetType() | Should -Be ([int])
+    $plan.Steps[0].Parameters.MaxTotalTests | Should -Be 321
+    $descriptor.AllowedParameters | Should -Contain 'MaxTotalTests'
+  }
+
+  It 'forwards the root throughput budget through the trusted child contract' {
+    $outRoot = Join-Path $TestDrive 'budget-artifacts'
+
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $script:RepoRoot 'Invoke-NetworkLantern.ps1') `
+      -Workflow Throughput -IperfTarget 'iperf3.example.net' -ThroughputMaxTotalTests 1 -DryRun -OutRoot $outRoot 2>&1
+
+    $LASTEXITCODE | Should -Be 0
+    ($output | Out-String) | Should -Match 'MaxTotalTests: 1\. Within budget: False'
+    Test-Path -LiteralPath $outRoot | Should -BeFalse
+  }
+
   It 'applies profile precedence through the stable adapter' {
     $profilePath = Join-Path $TestDrive 'adapter-workflow.json'
     Set-Content -LiteralPath $profilePath -Encoding utf8 -Value @'
@@ -276,6 +339,60 @@ Describe 'Network Lantern workflow module' {
 
     $result.ExitCode | Should -Not -Be 0
     $result.Output | Should -Match 'Workflow child envelope exceeds maximum size'
+  }
+
+  It 'makes child parameter binding errors terminating failures' {
+    . (Join-Path $script:RepoRoot 'apps/workflow/Private/WorkflowApplication.ps1')
+    $encodedBootstrap = New-NetworkLanternCapabilityChildBootstrap -RepositoryRoot $script:RepoRoot
+    $envelope = ConvertTo-Json -Compress -InputObject @{
+      Capability = 'WindowsTuning'
+      Parameters = @{ Action = 'Unsupported' }
+    }
+
+    $result = & $script:InvokeChildBootstrapEnvelope -EncodedBootstrap $encodedBootstrap -Envelope $envelope
+
+    $result.ExitCode | Should -Not -Be 0
+    $result.Output | Should -Match 'Action|ValidateSet|validation set'
+  }
+
+  It 'makes child adapter invocation errors terminating failures' {
+    . (Join-Path $script:RepoRoot 'apps/workflow/Private/WorkflowApplication.ps1')
+    $fakeRoot = Join-Path $TestDrive 'throwing-child-root'
+    $adapter = Join-Path $fakeRoot 'apps/path/Test-NetworkPath.ps1'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $adapter) -Force | Out-Null
+    & $script:WriteUtf8File -Path $adapter -Content "throw 'injected adapter failure'"
+    $encodedBootstrap = New-NetworkLanternCapabilityChildBootstrap -RepositoryRoot $fakeRoot
+    $envelope = ConvertTo-Json -Compress -InputObject @{ Capability = 'Path'; Parameters = @{} }
+
+    $result = & $script:InvokeChildBootstrapEnvelope -EncodedBootstrap $encodedBootstrap -Envelope $envelope
+
+    $result.ExitCode | Should -Not -Be 0
+    $result.Output | Should -Match 'injected adapter failure'
+  }
+
+  It 'initializes child native exit handling for a successful PowerShell adapter' {
+    . (Join-Path $script:RepoRoot 'apps/workflow/Private/WorkflowApplication.ps1')
+    $fakeRoot = Join-Path $TestDrive 'successful-child-root'
+    $adapter = Join-Path $fakeRoot 'apps/path/Test-NetworkPath.ps1'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $adapter) -Force | Out-Null
+    & $script:WriteUtf8File -Path $adapter -Content "Write-Output 'adapter completed'"
+    $encodedBootstrap = New-NetworkLanternCapabilityChildBootstrap -RepositoryRoot $fakeRoot
+    $envelope = ConvertTo-Json -Compress -InputObject @{ Capability = 'Path'; Parameters = @{} }
+
+    $result = & $script:InvokeChildBootstrapEnvelope -EncodedBootstrap $encodedBootstrap -Envelope $envelope
+
+    $result.ExitCode | Should -Be 0
+    $result.Output | Should -Match 'adapter completed'
+  }
+
+  It 'rejects an absent child-process exit status instead of reporting root success' {
+    . (Join-Path $script:RepoRoot 'apps/workflow/Private/WorkflowApplication.ps1')
+    Mock pwsh {}
+    $step = [pscustomobject]@{ Capability = 'Path'; Parameters = @{} }
+
+    {
+      Invoke-NetworkLanternCapabilityChild -Step $step -RepositoryRoot $script:RepoRoot
+    } | Should -Throw '*did not return a process exit status*'
   }
 
   It 'rejects an oversized child envelope before starting a process' {

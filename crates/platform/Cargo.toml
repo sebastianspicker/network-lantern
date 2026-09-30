@@ -1,0 +1,13 @@
+[package]
+name = "lantern-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+lantern-contracts = { path = "../contracts" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+libc.workspace = true
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }

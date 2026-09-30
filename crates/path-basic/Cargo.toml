@@ -1,0 +1,12 @@
+[package]
+name = "lantern-path-basic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lantern-packet = { path = "../packet" }
+lantern-path-io = { path = "../path-io" }
+serde.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

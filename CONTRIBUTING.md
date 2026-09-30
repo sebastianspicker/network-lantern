@@ -1,139 +1,114 @@
 # Contributing
 
-Changes are accepted through pull requests against `main`. Use the current
-Network Lantern names in code, tests, documentation, and issue reports. Legacy
-names belong only in migration or compatibility code.
+Changes land through pull requests against `main`. Network Lantern is an alpha,
+but compatibility changes still need to be deliberate, tested, and documented.
 
-## Development setup
+## Set up
 
-The full local gate requires:
+Keep the source checkout layout intact. The full toolchain is PowerShell 7, Git,
+Bash 4+, ShellCheck, Bats, `jq`, PSScriptAnalyzer 1.24.0, and Pester 5.7.1.
 
-- PowerShell 7
-- Git
-- Bash 4 or newer
-- ShellCheck
-- Bats
-- `jq`
-- PSScriptAnalyzer 1.24.0
-- Pester 5.7.1
-
-Check the current environment without installing anything:
+Check what is already available, without installing anything:
 
 ```powershell
 pwsh -NoProfile -NonInteractive -File .\scripts\Test-Prerequisites.ps1
 ```
 
-`scripts/ci.ps1` installs missing pinned PowerShell modules for the current
-user unless `-NoInstall` is supplied:
-
-```powershell
-pwsh -NoProfile -NonInteractive -File .\scripts\ci.ps1
-```
-
-Use native PowerShell for PowerShell checks on Windows. Run the cross-shell
-gate from Git Bash or WSL with `shellcheck`, `bats`, `jq`, and `pwsh` on that
-shell's `PATH`.
-
-## Change workflow
-
-1. Create a short-lived topic branch from current `main`.
-2. Make one related set of changes.
-3. Add or update tests for observable behavior.
-4. Update operator and contributor documentation affected by the change.
-5. Run focused tests while iterating.
-6. Run the complete local gate before opening a pull request.
-7. Open the pull request against `main`. Do not push directly to `main`.
-
-## Code boundaries
-
-- Keep operator entrypoints in `apps/` and the repository root thin. They bind
-  parameters, import a capability boundary, and translate process status.
-- Put PowerShell behavior behind module manifests with explicit Public/Private
-  load order. Apps must not import module-private files.
-- Compose the Bash path package only through `src/bash/path/load.sh`; libraries
-  must not source one another.
-- Keep product code independent from `scripts/`, which is development tooling.
-- Keep path, throughput, and Windows tuning code separate.
-- Do not add an `iperf3` dependency to path diagnostics.
-- Keep Windows tuning optional.
-- Preserve backup-before-mutation and restore validation for every tuning
-  mutation.
-- Do not add a tuning setting without documenting its scope in
-  `docs/evidence/tuning-matrix.md`.
-- Keep normal path, throughput-test, and tuning previews free of network probes,
-  result writes, and Windows configuration changes.
-- Treat throughput profile save and delete commands as explicit local writes.
-  `-SaveProfile -WhatIf` still writes the profile.
-
-## Tests and static analysis
-
-Run the complete gate:
+Run the complete gate from Bash, Git Bash, or WSL:
 
 ```bash
 ./scripts/ci-local.sh
 ```
 
-The gate runs ShellCheck, Bats, the secret-pattern scan, the project identity
-check, PSScriptAnalyzer, and Pester. It does not install system packages.
-`make ci-local` invokes the same script.
+The gate does not install operating-system packages. See
+[docs/TESTING.md](docs/TESTING.md) for dependency installation, focused checks,
+Make targets, CI coverage, and known gaps.
 
-Run the PowerShell-only gate without dependency installation:
+## Change workflow
 
-```powershell
-pwsh -NoProfile -NonInteractive -File .\scripts\ci.ps1 -NoInstall
-```
+1. Branch from current `main`.
+2. Make one related set of changes.
+3. Add or update tests for observable behavior.
+4. Update the owning operator or maintainer documentation.
+5. Run focused checks while you iterate.
+6. Run `./scripts/ci-local.sh` and `git diff --check` before opening a pull
+   request.
+7. Open the pull request against `main`; do not push directly to `main`.
 
-Run a filtered Pester subset while iterating:
+## Code boundaries
 
-```powershell
-pwsh -NoProfile -NonInteractive -File .\scripts\Invoke-Tests.ps1 `
-  -Filter 'Throughput'
-```
+- Keep root and `apps/` entrypoints thin. They bind parameters, import a
+  capability boundary, and translate process status.
+- Put PowerShell behavior in the owning module. Keep a complete explicit load
+  order, define public commands under `Public/`, and never import another module's
+  `Private/` files.
+- Compose the Bash path package only through `src/bash/path/load.sh`. Libraries
+  must not source one another.
+- Keep product code independent of `scripts/`.
+- Keep Windows path, MTR path, throughput, and Windows tuning behavior separate.
+  Similar native command parameters are not a shared domain model.
+- Keep Windows tuning optional, and preserve verified backup-before-mutation and
+  fail-closed restore validation.
+- Keep the workflow plan module pure. Adapter paths and allowed child parameters
+  belong to the trusted descriptor table in `apps/workflow/Private/`.
+- Keep `site/` static and non-persistent. It must not run diagnostics or call a
+  service.
 
-A filtered run is not a substitute for the complete gate. Both full and
-filtered Pester commands fail if no tests are selected or executed.
+The full component and dependency model is in
+[docs/architecture.md](docs/architecture.md).
 
-`make test` runs Bats and the PowerShell gate. It omits ShellCheck and the
-secret-pattern scan, so it is not the publication gate.
+## Compatibility and safety
 
-See [docs/verification.md](docs/verification.md) for the exact gate matrix and
-known verification gaps.
+Preserve documented entrypoint paths, public exports, CLI parameters,
+configuration and profile precedence, exit codes, output schemas, and default
+state locations unless changing them is the point of the pull request.
 
-## Windows checkouts
+Normal path, throughput-test, and tuning previews must not probe the network or
+create result or tuning state. Throughput profile save and delete are the
+exception: they write even when `-WhatIf` is also supplied.
 
-`.gitattributes` normalizes text files to LF. Do not convert Bash or Bats files
-to CRLF. When adding or renaming a Bash entrypoint from Windows, preserve its
-executable Git mode:
+Do not run live probes, throughput loads, or Windows mutation as routine test
+steps. Live testing needs an authorized target and environment. Elevated Windows
+apply-and-restore testing belongs on a disposable VM with an independent recovery
+method.
+
+## Windows and shell checkouts
+
+`.gitattributes` normalizes text files to LF. Do not convert shell or Bats files
+to CRLF. When you add or rename an executable shell entrypoint, record Git mode
+`100755`:
 
 ```bash
 git add --chmod=+x path/to/entrypoint.sh
 git ls-files --stage path/to/entrypoint.sh
 ```
 
-The staged mode should be `100755`.
+The maintained executable entrypoints are `apps/path/test-network-path.sh`,
+`scripts/ci-local.sh`, `scripts/install-test-deps.sh`, and
+`scripts/run-workflow.sh`.
 
-Do not exercise real Windows tuning changes as part of routine development.
-Use `-DryRun` for plan validation. Any elevated apply and restore test belongs
-on a disposable Windows VM with a separate recovery method.
+## Documentation ownership
 
-## Documentation
+- `README.md`: purpose, requirements, safe quick start, state locations, and
+  documentation navigation.
+- `docs/architecture.md`: component ownership, dependency rules, runtime flows,
+  trust boundaries, and invariants.
+- `docs/TESTING.md`: toolchain, complete and focused gates, CI, and verification
+  gaps.
+- `docs/workflows/`: exact operator behavior for path, throughput, and Windows
+  tuning.
+- `docs/evidence/tuning-matrix.md`: implemented and excluded tuning settings and
+  their automated evidence scope.
+- `docs/migration/`: repository-enforced compatibility pages. Keep all four
+  allow-listed filenames present.
+- `SECURITY.md`: vulnerability reporting and operational trust guidance.
+- `CHANGELOG.md`: release-facing changes under the established Unreleased section.
 
-Update documentation in the same pull request as behavior changes:
-
-- `README.md` for purpose, installation, configuration, and common commands
-- `docs/architecture.md` for component or data-flow changes
-- `docs/workflows/` for operator behavior
-- `docs/verification.md` for dependencies, tests, or verification scope
-- `docs/evidence/tuning-matrix.md` for Windows tuning scope
-- `docs/migration/` only for current compatibility mappings
-- `CHANGELOG.md` for release-facing changes
-
-Examples must run from the repository root unless the surrounding text says
-otherwise. Verify command names, paths, parameters, output names, and links.
+Examples run from the repository root unless their text says otherwise. Verify
+command names, paths, parameters, defaults, output names, and links against the
+implementation.
 
 ## Before opening a pull request
-
-Run:
 
 ```bash
 ./scripts/ci-local.sh
@@ -142,25 +117,13 @@ git status --short
 pwsh -NoProfile -NonInteractive -File scripts/Invoke-SecretScan.ps1
 ```
 
-The secret-pattern scan examines tracked files and untracked files that Git
-does not ignore. It suppresses matched content from its output. Review the
-candidate files yourself because pattern matching is not a substitute for
-manual inspection.
+The secret scan checks tracked and non-ignored untracked files and suppresses
+matching content from its output. It is a backstop, not a substitute for review.
 
-Do not include live diagnostic output, throughput profiles, packet captures,
-registry exports, tuning backups, credentials, or internal host information in
-a pull request unless the data is intentionally sanitized and required for a
-test fixture.
+Do not include live diagnostic output, saved profiles, packet captures, registry
+exports, tuning backups, credentials, or internal host information unless the
+data is intentionally sanitized and required as a fixture.
 
-## Pull request content
-
-Describe:
-
-- the behavior changed
-- the affected platforms and entrypoints
-- the commands used for verification
-- any tests skipped and the reason
-- any remaining operational or security limitations
-
-Keep pull requests scoped so reviewers can connect the implementation, tests,
-and documentation.
+In the pull request, describe the behavior you changed, the affected platforms and
+entrypoints, the commands you ran, any skipped checks and why, and the remaining
+operational or security limitations.

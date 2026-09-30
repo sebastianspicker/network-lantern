@@ -1,0 +1,19 @@
+// Permit an active local administrator to start or stop only a UID-scoped
+// Network Lantern helper instance. The helper independently binds its socket,
+// credential, and authenticated requests to that numeric UID.
+polkit.addRule(function(action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" ||
+        !subject.local || !subject.active) {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (typeof unit !== "string" ||
+        !/^network-lantern-helper@[0-9]+\.service$/.test(unit) ||
+        ["start", "stop"].indexOf(verb) === -1) {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    return polkit.Result.AUTH_ADMIN;
+});

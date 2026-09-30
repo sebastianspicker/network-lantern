@@ -9,6 +9,7 @@ param(
   [string]$IperfTarget,
   [ValidateRange(1, 65535)][int]$IperfPort = 5201,
   [ValidateSet('TCP', 'UDP', 'Both')][string]$ThroughputProtocol = 'Both',
+  [ValidateRange(0, 1000000)][int]$ThroughputMaxTotalTests = 0,
   [ValidateSet('Apply', 'Backup', 'Restore', 'Verify')][string]$TuningAction = 'Apply',
   [ValidateSet('Safe', 'Measured')][string]$TuningProfile = 'Safe',
   [uint16[]]$UdpPorts,
@@ -44,6 +45,9 @@ try {
   $workflowPlan = New-NetworkLanternWorkflowPlan @planParameters
   foreach ($step in @($workflowPlan.Steps)) {
     $childStatus = Invoke-NetworkLanternCapabilityChild -Step $step -RepositoryRoot $PSScriptRoot
+    if ($null -eq $childStatus) {
+      throw "Workflow capability '$($step.Capability)' did not return a process exit status."
+    }
     if ($childStatus -ne 0) {
       exit ([int]$childStatus)
     }

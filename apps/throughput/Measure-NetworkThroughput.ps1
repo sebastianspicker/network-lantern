@@ -93,6 +93,9 @@ Run a single quick TCP test only, useful for verifying basic connectivity.
 .PARAMETER RetryCount
 Number of retries per test on transient iperf3 failure. Range: 0-5. Default: 0.
 
+.PARAMETER MaxTotalTests
+Maximum planned tests allowed for a live run. Range: 0-1000000. Zero means unlimited. Default: 0.
+
 .PARAMETER ThresholdMinThroughputMbps
 Fail the run (exit code 14) if any test's throughput falls below this value in Mbps. Not set by default.
 
@@ -235,6 +238,9 @@ param(
 
   [ValidateRange(0, 5)]
   [int]$RetryCount,
+
+  [ValidateRange(0, 1000000)]
+  [int]$MaxTotalTests,
 
   [nullable[double]]$ThresholdMinThroughputMbps,
 

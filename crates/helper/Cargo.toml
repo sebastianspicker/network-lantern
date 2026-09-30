@@ -1,0 +1,58 @@
+[package]
+name = "lantern-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+lantern-path-io = { path = "../path-io" }
+lantern-contracts = { path = "../contracts" }
+lantern-path-basic = { path = "../path-basic" }
+lantern-path-trace = { path = "../path-trace" }
+lantern-throughput = { path = "../throughput" }
+lantern-tuning = { path = "../tuning" }
+chrono.workspace = true
+hmac = "0.12.1"
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+zbus.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+libc.workspace = true
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-service-management.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
+  "Win32_Security_WinTrust",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+  "Win32_System_Registry",
+  "Win32_System_Services",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "network-lantern-helper"
+path = "src/bin/network-lantern-helper.rs"

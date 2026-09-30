@@ -39,6 +39,23 @@ foreach ($commandName in @('git', 'bash', 'shellcheck', 'bats', 'jq')) {
   Add-PrerequisiteCheck -Name $commandName -Available ([bool]$command) -Detail $detail
 }
 
+$node = Get-Command -Name node -ErrorAction SilentlyContinue
+$nodeVersion = if ($node) { & $node.Source --version } else { '' }
+$nodeReady = $node -and $LASTEXITCODE -eq 0 -and $nodeVersion -match '^v(\d+)\.' -and [int]$Matches[1] -ge 22
+$nodeDetail = if ($nodeVersion) { [string]$nodeVersion } else { 'not found on PATH' }
+Add-PrerequisiteCheck -Name 'Node.js 22+ (development only)' -Available ([bool]$nodeReady) -Detail $nodeDetail
+
+$rustup = Get-Command -Name rustup -ErrorAction SilentlyContinue
+$toolchains = if ($rustup) { @(& $rustup.Source toolchain list) } else { @() }
+$rustReady = $rustup -and $LASTEXITCODE -eq 0 -and @($toolchains | Where-Object { $_ -match '^1\.96\.0(?:-|\s)' }).Count -gt 0
+$rustDetail = if ($rustReady) { 'Pinned toolchain installed' } else { 'Install the pinned Rust 1.96.0 toolchain; this check does not install it' }
+Add-PrerequisiteCheck -Name 'Rust 1.96.0 (development only)' -Available ([bool]$rustReady) -Detail $rustDetail
+foreach ($commandName in @('cargo', 'npm')) {
+  $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue
+  $detail = if ($command) { $command.Source } else { 'not found on PATH' }
+  Add-PrerequisiteCheck -Name $commandName -Available ([bool]$command) -Detail $detail
+}
+
 foreach ($moduleRequirement in @(
     [pscustomobject]@{ Name = 'PSScriptAnalyzer'; Version = [version]'1.24.0' }
     [pscustomobject]@{ Name = 'Pester'; Version = [version]'5.7.1' }

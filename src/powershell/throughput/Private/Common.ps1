@@ -31,6 +31,36 @@ $script:DefaultThresholdMaxJitterMs       = $null
 $script:Iperf3SummaryFileMaxBytes         = 1MB
 $script:Iperf3RunIndexFileMaxBytes        = 1MB
 $script:Iperf3CancellationSignalMaxBytes  = 512
+$script:Iperf3StdOutMaxBytes              = 1MB
+$script:Iperf3StdErrMaxBytes              = 64KB
+$script:Iperf3RawTextMaxBytes             = 16KB
+
+function ConvertTo-Iperf3BoundedUtf8Text {
+  [CmdletBinding()]
+  [OutputType([pscustomobject])]
+  param(
+    [AllowNull()][AllowEmptyString()][string]$Text,
+    [Parameter(Mandatory)][ValidateRange(1, 10485760)][int]$MaxBytes
+  )
+  if ($null -eq $Text) { $Text = '' }
+  $encoding = [System.Text.UTF8Encoding]::new($false)
+  if ($encoding.GetByteCount($Text) -le $MaxBytes) {
+    return [pscustomobject]@{ Text = $Text; Truncated = $false }
+  }
+
+  $chars = $Text.ToCharArray()
+  $bytes = [byte[]]::new($MaxBytes)
+  $charsUsed = 0
+  $bytesUsed = 0
+  $completed = $false
+  $encoder = $encoding.GetEncoder()
+  $encoder.Convert($chars, 0, $chars.Length, $bytes, 0, $bytes.Length, $true,
+    [ref]$charsUsed, [ref]$bytesUsed, [ref]$completed)
+  return [pscustomobject]@{
+    Text      = $encoding.GetString($bytes, 0, $bytesUsed)
+    Truncated = $true
+  }
+}
 
 function Read-Iperf3BoundedTextFile {
   <#

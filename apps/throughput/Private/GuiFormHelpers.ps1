@@ -1,4 +1,5 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The helper updates transient Windows Forms controls only.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural nouns describe collections and the established public parameter names.')]
 param()
 
 function Get-ParamHashFromRunTab {
@@ -45,19 +46,35 @@ function Get-ParamHashFromRunTab {
     StrictConfiguration   = $chkStrict.Checked
     ProfilesFile          = Get-ProfilesFileFromForm -Form $Form
     RetryCount            = [int]$retryCount.Value
-    DscpClasses           = @($dscpClasses.Text.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    TcpWindows            = @($tcpWindows.Text.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    TcpStreams             = @($tcpStreamsCtrl.Text.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { [int]$_ })
+    DscpClasses           = @(ConvertFrom-GuiCommaList -Text $dscpClasses.Text)
+    TcpWindows            = @(ConvertFrom-GuiCommaList -Text $tcpWindows.Text)
+    TcpStreams            = @(ConvertFrom-GuiTcpStreamsText -Text $tcpStreamsCtrl.Text)
     UdpStart              = $udpStart.Text.Trim()
     UdpMax                = $udpMax.Text.Trim()
     UdpStep               = $udpStep.Text.Trim()
     UdpLossThreshold      = [double]$udpLossThreshold.Value
+    MaxTotalTests         = Get-GuiMaxTotalTests -Form $Form
     Quiet                 = $false
   }
   if ([double]$threshMinTput.Value -gt 0) { $hash['ThresholdMinThroughputMbps'] = [double]$threshMinTput.Value }
   if ([double]$threshMaxLoss.Value -ge 0) { $hash['ThresholdMaxLossPct'] = [double]$threshMaxLoss.Value }
   if ([double]$threshMaxJitter.Value -ge 0) { $hash['ThresholdMaxJitterMs'] = [double]$threshMaxJitter.Value }
   return $hash
+}
+
+function Get-GuiRunInputValues {
+  param([System.Windows.Forms.Form]$Form)
+
+  return @{
+    Target      = ($Form.Controls.Find('txtTarget', $true) | Select-Object -First 1).Text
+    OutDir      = ($Form.Controls.Find('txtOutDir', $true) | Select-Object -First 1).Text
+    DscpClasses = ($Form.Controls.Find('txtDscpClasses', $true) | Select-Object -First 1).Text
+    TcpWindows  = ($Form.Controls.Find('txtTcpWindows', $true) | Select-Object -First 1).Text
+    TcpStreams  = ($Form.Controls.Find('txtTcpStreams', $true) | Select-Object -First 1).Text
+    UdpStart    = ($Form.Controls.Find('txtUdpStart', $true) | Select-Object -First 1).Text
+    UdpMax      = ($Form.Controls.Find('txtUdpMax', $true) | Select-Object -First 1).Text
+    UdpStep     = ($Form.Controls.Find('txtUdpStep', $true) | Select-Object -First 1).Text
+  }
 }
 
 function Update-UiBusyState {
@@ -76,6 +93,10 @@ function Update-UiBusyState {
   foreach ($b in @($btnRun, $btnWhatIf, $btnSaveProfile, $btnLoadProfile, $btnDeleteProfile, $btnRefreshProfiles)) {
     if ($b) { $b.Enabled = -not $Busy }
   }
+  foreach ($controlName in @('grpConnection', 'grpTestMatrix', 'grpGuardrails', 'btnToggleAdvanced')) {
+    $control = $Form.Controls.Find($controlName, $true) | Select-Object -First 1
+    if ($control) { $control.Enabled = -not $Busy }
+  }
   if ($btnCancel) { $btnCancel.Enabled = $Busy }
 }
 
@@ -84,23 +105,26 @@ function Test-RunFormValid {
     [System.Windows.Forms.Form]$Form,
     [System.Windows.Forms.ErrorProvider]$ErrorProvider
   )
-  $target = $Form.Controls.Find('txtTarget', $true) | Select-Object -First 1
-  $outDir = $Form.Controls.Find('txtOutDir', $true) | Select-Object -First 1
+  $controlNames = @{
+    Target = 'txtTarget'; OutDir = 'txtOutDir'; DscpClasses = 'txtDscpClasses'
+    TcpWindows = 'txtTcpWindows'; TcpStreams = 'txtTcpStreams'
+    UdpStart = 'txtUdpStart'; UdpMax = 'txtUdpMax'; UdpStep = 'txtUdpStep'
+  }
   $profilesFile = $Form.Controls.Find('txtProfilesFile', $true) | Select-Object -First 1
   $ok = $true
-  $ErrorProvider.SetError($target, '')
-  $ErrorProvider.SetError($outDir, '')
+  foreach ($controlName in $controlNames.Values) {
+    $control = $Form.Controls.Find($controlName, $true) | Select-Object -First 1
+    if ($control) { $ErrorProvider.SetError($control, '') }
+  }
   if ($profilesFile) { $ErrorProvider.SetError($profilesFile, '') }
-  if (-not $target.Text.Trim()) {
-    $ErrorProvider.SetError($target, 'Target is required.')
-    $ok = $false
-  }
-  elseif (-not (Test-ValidHostnameOrIP -Name $target.Text.Trim())) {
-    $ErrorProvider.SetError($target, 'Invalid hostname or IP address.')
-    $ok = $false
-  }
-  if (-not $outDir.Text.Trim()) {
-    $ErrorProvider.SetError($outDir, 'Output directory is required.')
+
+  $firstInvalidControl = $null
+  foreach ($issue in @(Get-GuiRunInputIssues -Values (Get-GuiRunInputValues -Form $Form))) {
+    $control = $Form.Controls.Find($controlNames[[string]$issue.Field], $true) | Select-Object -First 1
+    if ($control) {
+      $ErrorProvider.SetError($control, [string]$issue.Message)
+      if (-not $firstInvalidControl) { $firstInvalidControl = $control }
+    }
     $ok = $false
   }
   if ($profilesFile) {
@@ -110,7 +134,18 @@ function Test-RunFormValid {
     catch {
       $ErrorProvider.SetError($profilesFile, $_.Exception.Message)
       $ok = $false
+      if (-not $firstInvalidControl) { $firstInvalidControl = $profilesFile }
     }
+  }
+  if ($firstInvalidControl) {
+    $advancedPanel = $Form.Controls.Find('grpTestMatrix', $true) | Select-Object -First 1
+    if ($advancedPanel -and -not $advancedPanel.Visible -and
+        @('txtDscpClasses', 'txtTcpWindows', 'txtTcpStreams', 'txtUdpStart', 'txtUdpMax', 'txtUdpStep') -contains $firstInvalidControl.Name) {
+      $advancedPanel.Visible = $true
+      $toggleButton = $Form.Controls.Find('btnToggleAdvanced', $true) | Select-Object -First 1
+      if ($toggleButton) { $toggleButton.Text = 'Hide advanced test matrix' }
+    }
+    $firstInvalidControl.Select()
   }
   return $ok
 }

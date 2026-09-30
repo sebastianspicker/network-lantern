@@ -69,8 +69,8 @@ function Invoke-NetworkPathDiagnostics {
     throw "LogDirectory must not be empty, start with '-', contain '|', control chars, or path traversal (..): $LogDirectory"
   }
 
-  $defaultHosts4 = @('netcologne.de', 'google.com', 'wikipedia.org', 'amazon.de')
-  $defaultHosts6 = @('netcologne.de', 'google.com', 'wikipedia.org')
+  $defaultHosts4 = @('cloudflare.com', 'google.com', 'wikipedia.org', 'amazon.com')
+  $defaultHosts6 = @('cloudflare.com', 'google.com', 'wikipedia.org')
   $configHosts = Get-HostsFromConfig -Path $defaultHostsConfig
   if (-not $PSBoundParameters.ContainsKey('HostsIPv4')) {
     $HostsIPv4 = if (@($configHosts.IPv4).Count -gt 0) { @($configHosts.IPv4) } else { @($defaultHosts4) }

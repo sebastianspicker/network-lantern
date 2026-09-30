@@ -32,16 +32,21 @@ jobs:
       - name: Install bash test tools
         run: sudo apt-get update && sudo apt-get install -y shellcheck bats jq
 
+      - name: Set up Node.js for static planner tests
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
       - name: Cache PowerShell modules
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.local/share/powershell/Modules
           key: psmodules-${{ runner.os }}-pssa-1.24.0-pester-5.7.1
 
-      - name: Run local CI
+      - name: Run legacy behavior gate
         env:
           NETWORK_LANTERN_INSTALL_MISSING_MODULES: "1"
-        run: ./scripts/ci-local.sh
+        run: ./scripts/ci-legacy.sh
 
   powershell-lint-test:
     name: PowerShell checks (${{ matrix.os }})
@@ -53,8 +58,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            modulePath: ~/.local/share/powershell/Modules
           - os: windows-latest
             modulePath: C:\Users\runneradmin\Documents\PowerShell\Modules
     steps:

@@ -117,6 +117,9 @@ function Invoke-Iperf3 {
   $testStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   $jsonText = $null
   $nativeProcess = $null
+  $stdOutTruncated = $false
+  $stdErrTruncated = $false
+  $nativeOutputTruncated = $false
   if ($null -ne $Runner) {
     $rawLines = & $Runner -IperfArgs $iperfArgs 2>&1
     $exitCode = $LASTEXITCODE
@@ -143,6 +146,9 @@ function Invoke-Iperf3 {
     $exitCode = $nativeProcess.ExitCode
     $stdout = $nativeProcess.StdOut
     $stderr = $nativeProcess.StdErr
+    $stdOutTruncated = [bool]$nativeProcess.StdOutTruncated
+    $stdErrTruncated = [bool]$nativeProcess.StdErrTruncated
+    $nativeOutputTruncated = [bool]$nativeProcess.NativeOutputTruncated
     if (-not $nativeProcess.StreamsCompleted) {
       Write-Warning "iperf3 output collection was incomplete: $($nativeProcess.StreamReadError)"
       if ($exitCode -eq 0) { $exitCode = -1 }
@@ -169,11 +175,26 @@ function Invoke-Iperf3 {
   } elseif ($exitCode -eq 0) {
     $jsonParseError = 'iperf3 JSON output was not found.'
   }
+  # JSON extraction consumes the bounded native capture before the retained
+  # diagnostic is reduced. Metrics use Json and therefore remain independent
+  # of the smaller diagnostic retention limit.
+  $rawDiagnostic = ConvertTo-Iperf3BoundedUtf8Text -Text $rawText -MaxBytes $script:Iperf3RawTextMaxBytes
+  $rawText = $rawDiagnostic.Text
+  $rawLines = @($rawText -split '\r?\n')
+  if ($nativeOutputTruncated -and $exitCode -eq 0) {
+    # A complete-looking JSON prefix cannot prove that the native result was
+    # complete. Preserve parsed metrics for diagnosis while failing the test.
+    $exitCode = -1
+  }
   return [pscustomobject]@{
     Args           = $iperfArgs
     ExitCode       = $exitCode
     RawLines       = $rawLines
     RawText        = $rawText
+    StdOutTruncated = $stdOutTruncated
+    StdErrTruncated = $stdErrTruncated
+    NativeOutputTruncated = $nativeOutputTruncated
+    RawTextTruncated = [bool]$rawDiagnostic.Truncated
     Json           = $jsonObj
     JsonParseError = $jsonParseError
     DurationMs     = $durationMs

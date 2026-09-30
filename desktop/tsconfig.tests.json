@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","compilerOptions":{"types":["node","mocha","webdriverio","vite/client"]},"include":["tests/**/*.ts","*.config.ts","wdio.conf.ts"]}

@@ -1,5 +1,20 @@
 # iperf3 test execution and UDP saturation helpers (private to NetworkLantern.Throughput)
 
+function Get-Iperf3UdpSaturationStepCount {
+  [CmdletBinding()]
+  [OutputType([int])]
+  param(
+    [Parameter(Mandatory)][double]$CurMbps,
+    [Parameter(Mandatory)][double]$MaxMbps,
+    [Parameter(Mandatory)][ValidateRange([double]::Epsilon, [double]::MaxValue)][double]$StepMbps,
+    [ValidateRange(1, 1000000)][int]$MaxIterations = $script:MaxUdpSaturationIterations
+  )
+  if ($MaxMbps -le $CurMbps) { return 0 }
+  $span = [decimal]$MaxMbps - [decimal]$CurMbps
+  $decimalStep = [decimal]$StepMbps
+  return [math]::Min(([int][decimal]::Floor($span / $decimalStep) + 1), $MaxIterations)
+}
+
 function Invoke-SingleIperf3TestAndAddResult {
   [CmdletBinding()]
   [OutputType([pscustomobject])]
@@ -116,15 +131,13 @@ function Invoke-UdpSaturationForDscp {
   # Build-TestPlan budgets no saturation work unless the ceiling is above the
   # fixed-rate starting point. Keep execution aligned with that plan so test
   # counts and progress denominators remain exact.
-  if ($MaxMbps -le $CurMbps) { return }
-  $cur = $CurMbps
-  $max = $MaxMbps
-  $step = $StepMbps
+  $stepCount = Get-Iperf3UdpSaturationStepCount -CurMbps $CurMbps -MaxMbps $MaxMbps -StepMbps $StepMbps -MaxIterations $MaxUdpIterations
+  if ($stepCount -eq 0) { return }
+  $cur = [decimal]$CurMbps
+  $step = [decimal]$StepMbps
   foreach ($dir in @('TX', 'RX')) {
-    $bw = $cur
-    $iterations = 0
-    while ($bw -le $max -and $iterations -lt $MaxUdpIterations) {
-      $iterations++
+    for ($iteration = 0; $iteration -lt $stepCount; $iteration++) {
+      $bw = $cur + ([decimal]$iteration * $step)
       $TestNoRef.Value++
       $testNo = $TestNoRef.Value
       if ($Progress) {
@@ -137,7 +150,6 @@ function Invoke-UdpSaturationForDscp {
       $m = $res.Metrics
       if ($run.ExitCode -ne 0 -and $null -eq $run.Json) { break }
       if ($null -ne $m.LossPct -and [double]$m.LossPct -gt $UdpLossThreshold) { break }
-      $bw += $step
     }
   }
 }
