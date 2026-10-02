@@ -103,7 +103,16 @@ Describe 'Windows tuning verified restore staging' {
       try {
         $session = Copy-NetworkTuningVerifiedBackupToStaging -BackupFolder $sourceFolder -Manifest $manifest
         $movedPath = "$($session.Path)-moved"
-        Move-Item -LiteralPath $session.Path -Destination $movedPath
+        try {
+          Move-Item -LiteralPath $session.Path -Destination $movedPath -ErrorAction Stop
+        } catch [System.IO.IOException] {
+          # Windows refuses to move a directory while the session holds its
+          # sentinel open, so the replacement cannot happen at all.
+          $IsWindows | Should -BeTrue
+          $movedPath = $null
+          (Test-NetworkTuningRestoreStagingInvariant -Session $session -Manifest $manifest).IsValid | Should -BeTrue
+          return
+        }
         New-Item -ItemType Directory -Path $session.Path -Force | Out-Null
 
         $check = Test-NetworkTuningRestoreStagingInvariant -Session $session -Manifest $manifest
