@@ -8,8 +8,8 @@ BeforeAll {
 
 # CI runners are elevated (Windows admin, root in containers), where default and
 # relative profile paths are refused; that guard is covered in ThroughputBoundaries.
-# Each Describe mocks it because a test below re-imports the module, which drops
-# mocks bound to the previous module instance.
+# Each Describe mocks it because the first Describe re-imports the module, which
+# drops mocks bound to the previous module instance.
 
 Describe 'NetworkLantern.Throughput bounded native output' {
   BeforeAll { Mock -ModuleName 'NetworkLantern.Throughput' Test-Iperf3ProcessIsElevated { $false } }

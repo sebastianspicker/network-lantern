@@ -56,5 +56,17 @@ if ($callerRequestedPassThru) {
 }
 
 if ($null -eq $result -or -not [bool]$result.Success) {
+  if (-not $callerRequestedPassThru) {
+    # Without -PassThru nothing else tells the caller why the action failed.
+    $reasons = @()
+    if ($null -ne $result) {
+      $reasons += @($result.Components.GetEnumerator() |
+          Where-Object { $_.Value -notin @('OK', 'Skipped') } |
+          ForEach-Object { "$($_.Key)=$($_.Value)" })
+      $reasons += @($result.Warnings)
+    }
+    $detail = if ($reasons.Count -gt 0) { ": $($reasons -join '; ')" } else { '.' }
+    [Console]::Error.WriteLine("Network path tuning $Action did not succeed$detail")
+  }
   exit 1
 }
