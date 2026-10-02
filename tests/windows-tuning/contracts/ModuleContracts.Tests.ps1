@@ -162,6 +162,7 @@ Describe 'Windows tuning public contracts' {
         }
 
         Mock Assert-NetworkTuningAdministrator {}
+        Mock Test-NetworkTuningBackupWritePathTrust { [pscustomobject]@{ IsTrusted = $true; Message = '' } }
         Mock Backup-NetworkTuningState { [pscustomobject]@{ Status = 'Warn' } }
         Mock Resolve-NetworkTuningRestoreStatus { 'Warn' }
         Mock Read-NetworkTuningBackupManifest { [pscustomobject]@{ Status = 'Invalid'; Message = 'digest mismatch' } }
