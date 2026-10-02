@@ -1,6 +1,6 @@
 import { command } from './bridge';
 import { $, control } from './dom';
-import { currentRequest, invalidatePreview, syncPathOptions, updateAvailability } from './measurement';
+import { currentRequest, invalidatePreview, setStage, syncPathOptions, updateAvailability } from './measurement';
 import { active, errorMessage, fingerprint, type Json, type Request } from './model';
 import { planSummary } from './render';
 import { pollRun } from './run';
@@ -10,6 +10,7 @@ async function reviewPlan(event: Event) {
   event.preventDefault();
   const token = ++state.generation;
   state.planning = true;
+  setStage('planning');
   $('plan-error').textContent = '';
   $('plan-state').textContent = 'Resolving and validating the plan…';
   updateAvailability();
@@ -20,15 +21,16 @@ async function reviewPlan(event: Event) {
     if (token !== state.generation) return;
     state.previewRequest = (result.resolved_request as unknown as Request | undefined) ?? request;
     state.previewKey = key;
+    setStage('ready');
     $('plan-state').textContent = 'Plan ready. Review the resolved settings before starting.';
     $('plan-json').textContent = JSON.stringify(result, null, 2);
     $('plan-details').hidden = false;
-    $<HTMLDetailsElement>('plan-details').open = true;
     $('plan-summary').innerHTML = planSummary(result);
   } catch (error) {
     if (token === state.generation) {
       state.previewKey = '';
       state.previewRequest = null;
+      setStage('error');
       $('plan-error').textContent = errorMessage(error);
       $('plan-state').textContent = 'Plan unavailable. Resolve the issue and review again.';
     }

@@ -6,15 +6,20 @@ import { state } from './state';
 
 export async function checkRuntime() {
   $('environment').textContent = 'Checking runtime…';
+  $('environment').dataset.state = 'checking';
   try {
     const doctor = await command<Doctor>('doctor');
     state.doctor = doctor;
     $('environment').textContent = `${doctor.os} · ${doctor.architecture} · ${doctor.version}`;
+    $('environment').dataset.state = 'ready';
     $('runtime-notice').textContent = 'Local runtime ready. Review capability permissions before starting.';
+    $('runtime-notice').dataset.tone = 'ok';
     $('helper-detail').textContent = helperDetail(doctor.helper);
   } catch (error) {
     state.doctor = null;
     $('environment').textContent = 'Runtime unavailable';
+    $('environment').dataset.state = 'unavailable';
+    $('runtime-notice').dataset.tone = 'alert';
     $('helper-detail').textContent = 'Helper status unavailable while the native runtime is disconnected.';
     $('runtime-notice').textContent = errorMessage(error);
   }

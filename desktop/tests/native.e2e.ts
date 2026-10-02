@@ -11,7 +11,7 @@ describe('Native desktop bridge, no external probes',()=>{
   before(async()=>{directory=await realpath(await mkdtemp(join(tmpdir(),'lantern-desktop-e2e-')));});
   after(async()=>{await rm(directory,{recursive:true,force:true});});
   it('loads the desktop and exposes real runtime capabilities',async()=>{
-    await expect($('h1')).toHaveText('Investigate your network.');
+    await expect($('h1')).toHaveText('Network Lantern');
     await browser.waitUntil(async()=>!(await $('#environment').getText()).includes('Checking'));
     const info=await invoke('doctor') as {application:string;probes_performed:boolean};expect(info.application).toBe('network-lantern');expect(info.probes_performed).toBe(false);
   });

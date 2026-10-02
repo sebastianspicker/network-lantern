@@ -188,7 +188,8 @@ The static planner suite checks pure command generation across every workflow,
 checkbox state, and select option, including input validation and budget
 forwarding. A minimal DOM fixture exercises the shipped interaction script's
 keyboard navigation, field errors, reset behavior, and clipboard success, failure,
-and stale-command feedback. These Node tests do not render a browser, so layout
+and stale-command feedback. A token test keeps `site/tokens.css` and the bundled
+fonts byte-identical to their desktop copies in `desktop/src/`. These Node tests do not render a browser, so layout
 changes also need desktop and mobile browser QA.
 
 GUI regressions cover text validation before the busy state, plan and result

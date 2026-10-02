@@ -47,6 +47,13 @@ function showProfileParameters(data: Json) {
   control('profile-json').value = JSON.stringify(data, null, 2);
 }
 
+// Marks the list entry shown in the editor; survives list refreshes after save or delete.
+function markLoadedProfile(name: string) {
+  document.querySelectorAll<HTMLButtonElement>('[data-profile]').forEach(button => {
+    button.setAttribute('aria-current', String(button.dataset.profile === name));
+  });
+}
+
 function editorIsCurrent(revision: number, navigation: number, store: string) {
   return () => revision === profiles.revision && navigation === state.libraryRevision && store === control('store').value;
 }
@@ -61,6 +68,7 @@ export async function loadProfiles(announce = true) {
     const names = await command<string[]>('profiles_list', { store });
     if (!current()) return;
     $('profile-list').innerHTML = profileList(names);
+    if (control('profile-name').value) markLoadedProfile(control('profile-name').value);
     task?.message(names.length ? `${names.length} saved profiles` : 'No profiles in this store. Save a configuration to get started.');
   } catch (error) {
     task?.message(errorMessage(error));
@@ -79,6 +87,7 @@ async function readProfile(name: string) {
     if (!task.current()) return;
     control('profile-name').value = name;
     showProfileParameters(data);
+    markLoadedProfile(name);
     task.message('Profile loaded for review.');
   });
   if (task.current()) {

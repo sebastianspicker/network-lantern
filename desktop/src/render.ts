@@ -1,4 +1,4 @@
-import { errorMessage, escape as e, plannedItems, type Json, type RunsPage } from './model';
+import { errorMessage, escape as e, planEntry, type Json, type PlanEntry, type RunsPage } from './model';
 
 export type Attributes = Record<string, string | true>;
 
@@ -25,25 +25,37 @@ export function select(id: string, label: string, values: readonly Option[]): st
   return `<label class="field" for="${e(id)}"><span>${e(label)}</span><select id="${e(id)}">${options(values)}</select></label>`;
 }
 
+function manifestEntry(entry: PlanEntry): string {
+  const facts = entry.facts.map(fact => `<div class="fact${fact.wide ? ' wide' : ''}"${fact.tone ? ` data-tone="${fact.tone}"` : ''}>`
+    + `<dt>${e(fact.label)}</dt><dd>${e(fact.value)}</dd></div>`);
+  const operations = entry.operations.length
+    ? `<ol class="operations" aria-label="Ordered operations">${entry.operations.map(item => `<li>${e(item)}</li>`).join('')}</ol>`
+    : '';
+  const warnings = entry.warnings.map(warning => `<p class="notice" data-tone="alert">${e(warning)}</p>`);
+  return `<li class="entry"><h3>${e(entry.title)}</h3><dl class="facts">${facts.join('')}</dl>${operations}${warnings.join('')}</li>`;
+}
+
+// A workflow plan lists its capability steps; a single-capability plan is its own step.
 export function planSummary(result: Json): string {
   const steps = (result.steps as Json[] | undefined) || [result];
-  const items = steps.map(step => `<li><strong>${e(step.capability)}</strong><p>${e(plannedItems(step))} planned items</p></li>`);
-  const warnings = ((result.warnings as string[]) || []).map(warning => `<p class="notice">${e(warning)}</p>`);
-  return `<ol class="steps">${items.join('')}</ol>${warnings.join('')}`;
+  const warnings = ((result.warnings as string[]) || []).map(warning => `<p class="notice" data-tone="alert">${e(warning)}</p>`);
+  return `<ol class="manifest">${steps.map(step => manifestEntry(planEntry(step))).join('')}</ol>${warnings.join('')}`;
 }
 
 export function profileList(names: string[]): string {
-  return names.map(name => `<li><button class="secondary" data-profile="${e(name)}">${e(name)}</button></li>`).join('');
+  return names.map(name => `<li><button class="index-item" data-profile="${e(name)}">${e(name)}</button></li>`).join('');
 }
 
 export function runList(runs: RunsPage['runs']): string {
   return runs.map(item => {
+    const status = item.summary?.status ? String(item.summary.status) : '';
+    const label = status || errorMessage(item.error || 'Unavailable');
     const cells = [
-      item.summary?.timestamp || item.path,
-      item.summary?.status || errorMessage(item.error || 'Unavailable'),
-      item.summary?.total ?? 'Unavailable',
-    ].map(cell => `<td>${e(cell)}</td>`);
-    return `<tr>${cells.join('')}<td><button class="secondary" data-report="${e(item.path)}">Open</button></td></tr>`;
+      `<td class="data">${e(item.summary?.timestamp || item.path)}</td>`,
+      `<td><span class="status" data-status="${e(status || 'unavailable')}">${e(label)}</span></td>`,
+      `<td class="figure">${e(item.summary?.total ?? 'Unavailable')}</td>`,
+    ];
+    return `<tr>${cells.join('')}<td class="row-action"><button class="secondary compact" data-report="${e(item.path)}">Open</button></td></tr>`;
   }).join('');
 }
 

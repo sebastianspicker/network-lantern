@@ -28,7 +28,7 @@ export function navigate(next: Flow) {
   $('reports').hidden = next !== 'reports';
   const entry = flowEntry(next);
   $('flow-title').textContent = entry.label;
-  $('flow-description').textContent = entry.description;
+  $('flow-description').textContent = entry.summary;
   for (const [id, show] of Object.entries(visibleFieldsets(next))) {
     $(id).hidden = !show;
     $<HTMLFieldSetElement>(id).disabled = !show;

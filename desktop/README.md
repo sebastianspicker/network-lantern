@@ -9,6 +9,11 @@ simulate a successful result.
 ## Source layout
 
 - `src/main.ts` mounts the page and wires the modules together.
+- `src/tokens.css` defines the design tokens (type, space, colour roles for light
+  and dark) and loads the bundled Atkinson Hyperlegible fonts from `src/fonts/`.
+  The planner uses a byte-identical copy in `site/`; edit both together.
+  `src/style.css` builds every component from these tokens. The rationale is in
+  `DESIGN_BRIEF.md`.
 - `src/markup.ts` holds the static page structure. Element ids are a contract with
   the browser and native tests; `tests/fixtures/dom-contract.json` records them.
 - `src/state.ts` is the single view-state object, including the generation

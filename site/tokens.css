@@ -1,0 +1,128 @@
+/*
+ * Network Lantern design tokens: "Logbook & Lamp".
+ * Shared verbatim by desktop/src/tokens.css and site/tokens.css; tests/site/tokens.test.cjs keeps them identical.
+ * Colour is consequence: ink and paper for everything calm, lamp amber only where the network will feel it,
+ * alert red only where something is changed or removed.
+ */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("./fonts/atkinson-hyperlegible-next.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  src: url("./fonts/atkinson-hyperlegible-mono.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Type */
+  --font-ui: "Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif;
+  --font-data: "Atkinson Hyperlegible Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 21px;
+  --text-2xl: 28px;
+  --text-3xl: 40px;
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-body: 1.55;
+  --tracking-display: -0.02em;
+  --tracking-label: 0.08em;
+  --weight-regular: 400;
+  --weight-medium: 520;
+  --weight-strong: 650;
+  --weight-display: 720;
+
+  /* Space: 4px baseline */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Shape: ruled, not rounded */
+  --radius-control: 2px;
+  --radius-none: 0;
+  --hairline: 1px;
+  --control-height: 38px;
+  --control-height-compact: 32px;
+
+  /* Motion */
+  --duration-quick: 120ms;
+  --duration-settle: 220ms;
+  --duration-breathe: 2400ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Colour roles, light: white surface, cool neutral greys, blue-black ink */
+  --paper: #ffffff;
+  --sheet: #f5f6f8;
+  --ink: #0d1117;
+  --ink-2: #4a515c;
+  --ink-3: #5f6773;
+  --rule: #e2e5e9;
+  --rule-strong: #b9bfc7;
+  --field: #7d8590;
+  --wash: #eef0f3;
+  --lamp: #efa531;
+  --lamp-edge: #9a6200;
+  --lamp-ink: #1d1404;
+  --lamp-text: #7d4b00;
+  --lamp-wash: #fff6e3;
+  --alert: #b42318;
+  --alert-wash: #fdeceb;
+  --ok: #1a6b58;
+  --ok-wash: #e6f2ee;
+  --slip: #0d1117;
+  --slip-text: #e8eaed;
+  --slip-muted: #a7adb5;
+  --slip-ok: #6cc4a9;
+  --focus: #0d1117;
+  --focus-on-dark: #f2ae45;
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%230d1117' stroke-width='1.5'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Night shift: near-black neutral surfaces, cool light ink, the same lamp. */
+    --paper: #0d0f12;
+    --sheet: #15181c;
+    --ink: #e8eaed;
+    --ink-2: #a7adb5;
+    --ink-3: #8a919a;
+    --rule: #262a30;
+    --rule-strong: #3d434b;
+    --field: #69707a;
+    --wash: #1c2026;
+    --lamp: #f2ae45;
+    --lamp-edge: #f2ae45;
+    --lamp-ink: #1d1404;
+    --lamp-text: #f2ae45;
+    --lamp-wash: #2a2114;
+    --alert: #ff8f80;
+    --alert-wash: #2c1715;
+    --ok: #6cc4a9;
+    --ok-wash: #12241e;
+    --slip: #07080a;
+    --slip-text: #e8eaed;
+    --slip-muted: #9aa1aa;
+    --slip-ok: #6cc4a9;
+    --focus: #f2ae45;
+    --focus-on-dark: #f2ae45;
+    --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23e8eaed' stroke-width='1.5'/%3E%3C/svg%3E");
+  }
+}

@@ -65,7 +65,7 @@ test('helper authorization stays exclusive across polling and denial is actionab
 test('tuning plan count and stale asynchronous previews reflect current settings',async({page})=>{
   await useNativeFixture(page);await page.goto('/');await page.evaluate(()=>{(window as any).fixture.state='idle';});
   await page.locator('[data-flow="windows_tuning"]').click();await page.locator('#preview').click();
-  await expect(page.locator('#plan-summary')).toContainText('1 planned items');await expect(page.locator('#start')).toBeEnabled();
+  await expect(page.locator('#plan-summary')).toContainText('1 planned item');await expect(page.locator('#start')).toBeEnabled();
   await page.locator('#udp-port').fill('5202');await expect(page.locator('#start')).toBeDisabled();await expect(page.locator('#plan-details')).toBeHidden();await expect(page.locator('#plan-summary')).toBeEmpty();
   await page.evaluate(()=>{(window as any).fixture.planDelay=500;});await page.locator('#preview').click();await page.locator('#udp-port').fill('5203');await expect(page.locator('#preview')).toBeEnabled();await expect(page.locator('#start')).toBeDisabled();await expect(page.locator('#plan-details')).toBeHidden();
 });
@@ -343,7 +343,7 @@ test('DOM contract of every flow matches the characterized interface', async ({ 
   });
   await expect(page.locator('#run-strip')).toBeHidden();
   await page.locator('#preview').click();
-  await expect(page.locator('#plan-summary')).toContainText('planned items');
+  await expect(page.locator('#plan-summary')).toContainText('planned item');
   contract.planSummary = await page.locator('#plan-summary').evaluate(node => node.innerHTML);
   await page.locator('[data-flow="profiles"]').click();
   await expect(page.locator('#profile-list')).toContainText('Beta');

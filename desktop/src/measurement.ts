@@ -36,7 +36,15 @@ export function currentRequest(): Request {
   return workflowRequest(state.flow, inputs(), state.loadedWorkflowEnvelope);
 }
 
+export type Stage = 'configure' | 'planning' | 'ready' | 'error';
+
+// Drives the Configure → Review → Run indicator; the status line remains the accessible source.
+export function setStage(stage: Stage) {
+  $('measurement').dataset.stage = stage;
+}
+
 export function invalidatePreview() {
+  setStage('configure');
   $('plan-summary').replaceChildren();
   $('plan-details').hidden = true;
   state.generation++;
@@ -57,6 +65,7 @@ function previewIsFresh(): boolean {
 export function updateAvailability() {
   const capability = capabilityFor(state.doctor, state.flow, control('engine').value);
   $('capability').textContent = capabilityNotice(capability);
+  $('capability').dataset.available = String(capability.available);
   const disabled = disabledControls({
     native,
     available: capability.available,

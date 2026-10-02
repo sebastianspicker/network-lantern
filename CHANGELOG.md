@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Interface redesign ("Logbook & Lamp")
+
+- Desktop and planner share one token set and bundled OFL fonts (Atkinson
+  Hyperlegible Next and Mono); no font is fetched from a third party. Light and
+  dark themes follow the system setting.
+- The desktop plan preview now summarizes the Rust plan as a manifest: targets,
+  planned tests or items, nominal time, budget, whether Windows settings change,
+  helper requirement, and ordered tuning operations. The resolved JSON remains
+  available and now starts collapsed. Tauri commands and payloads are unchanged.
+- Amber marks only the Start action and an active run; red marks changes and
+  removal. A Configure → Review → Run indicator follows the preview state.
+- Static copy rewritten; behavioural status strings are unchanged except
+  "planned items" pluralization. DOM contract regenerated with all ids kept.
+
 ### Repository reconstruction
 
 - Restore regular file modes: only the seven directly invoked shell scripts are

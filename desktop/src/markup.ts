@@ -7,47 +7,63 @@ const compact = (html: string) => html.replace(/>\s*\n\s*</g, '><').trim();
 const hostAttributes = { autocomplete: 'off', spellcheck: 'false', maxlength: '253' };
 const portAttributes = { min: '1', max: '65535', required: true } as const;
 
+// The lantern body is drawn in ink; only its flame carries the lamp colour.
 const logo = `
-  <svg viewBox="0 0 32 32" aria-hidden="true">
-    <circle cx="16" cy="16" r="15"/>
-    <path d="M11 10h10l2 16H9l2-16Zm2 0V7a3 3 0 0 1 6 0v3M12 13h8M16 15c-4 4-3 7 0 7s4-3 0-7Z"/>
+  <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+    <path class="mark-body" d="M11 10h10l2 16H9l2-16Zm2 0V7a3 3 0 0 1 6 0v3M12 13h8M8 26h16"/>
+    <path class="mark-flame" d="M16 15.5c-3.4 3.4-2.6 6 0 6s3.4-2.6 0-6Z"/>
   </svg>`;
 
 const header = `
   <a class="skip-link" href="#content">Skip to workspace</a>
-  <header>
-    <div class="brand">${logo}Network Lantern</div>
-    <span id="environment">Checking runtime…</span>
-    <button id="refresh-runtime" class="secondary">Check runtime</button>
+  <header class="masthead">
+    <h1 class="brand">${logo}<span>Network Lantern</span></h1>
+    <div class="runtime">
+      <span id="environment">Checking runtime…</span>
+      <button id="refresh-runtime" class="quiet compact">Check runtime</button>
+    </div>
   </header>`;
 
 const helperPanel = `
   <details class="helper-panel">
     <summary>Privileged helper</summary>
-    <p>Register the helper when native probes or Windows changes require authorization. The operating system controls approval.</p>
-    <p id="helper-detail" role="status">Checking helper…</p>
+    <p>Needed for native probes and Windows changes. Your operating system asks for approval.</p>
+    <p id="helper-detail" class="data" role="status">Checking helper…</p>
     <div class="actions">
-      <button id="helper-register" class="secondary">Register helper</button>
-      <button id="helper-remove" class="danger">Remove helper</button>
+      <button id="helper-register" class="secondary compact">Register</button>
+      <button id="helper-remove" class="danger compact">Remove</button>
     </div>
   </details>`;
 
 const runStrip = `
   <section id="run-strip" class="run-strip" aria-label="Active measurement" hidden>
-    <div><strong id="run-title" role="status"></strong><p id="run-count"></p></div>
+    <span class="lamp-indicator" aria-hidden="true"></span>
+    <div class="run-head"><strong id="run-title" role="status"></strong><p id="run-count"></p></div>
     <progress id="run-progress"></progress>
-    <button id="cancel" class="danger">Cancel run</button>
-    <button id="open-run" class="secondary" hidden>Open report</button>
-    <details><summary>Recent activity</summary><pre id="run-logs" tabindex="0"></pre></details>
+    <div class="run-actions">
+      <button id="cancel" class="danger">Cancel run</button>
+      <button id="open-run" class="secondary" hidden>Open report</button>
+    </div>
+    <details class="run-log"><summary>Recent activity</summary><pre id="run-logs" tabindex="0"></pre></details>
     <p id="run-error" class="error" role="alert"></p>
   </section>`;
 
+const groups = [
+  { id: 'measure', label: 'Measure' },
+  { id: 'change', label: 'Change' },
+  { id: 'records', label: 'Records' },
+] as const;
+
 const navigation = `
-  <nav aria-label="Workflows">
-    ${flows.map(({ id, label, description }) => `
-      <button data-flow="${e(id)}" aria-current="${id === 'triage' ? 'page' : 'false'}">
-        <strong>${e(label)}</strong><span>${e(description)}</span>
-      </button>`).join('')}
+  <nav class="rail" aria-label="Workflows">
+    ${groups.map(group => `
+      <div class="rail-group" role="group" aria-labelledby="rail-${group.id}">
+        <p class="rail-label" id="rail-${group.id}">${group.label}</p>
+        ${flows.filter(flow => flow.group === group.id).map(({ id, label, description }) => `
+          <button data-flow="${e(id)}" aria-current="${id === 'triage' ? 'page' : 'false'}">
+            <strong>${e(label)}</strong><span>${e(description)}</span>
+          </button>`).join('')}
+      </div>`).join('')}
   </nav>`;
 
 const pathFields = `
@@ -64,7 +80,7 @@ const pathFields = `
         { value: 'path_trace', label: 'Continuous path trace' },
       ])}
       ${select('trace-type', 'Trace mode', ['ICMP4', 'TCP4', 'UDP4', 'MPLS4', 'AS4'])}
-      <p class="hint">AS4/AS6 discloses hop addresses to Team Cymru DNS.</p>
+      <p class="hint">AS mode sends hop addresses to Team Cymru DNS to look up their networks.</p>
     </div>
     <label class="check"><input id="skip" type="checkbox">Skip pathping</label>
   </fieldset>`;
@@ -78,7 +94,7 @@ const throughputFields = `
       ${select('protocol', 'Protocol', ['Both', 'TCP', 'UDP'])}
     </div>
     ${field('max-tests', 'Maximum tests', '0', 'number', { min: '0', max: '1000000', required: true })}
-    <p class="hint">0 means unlimited. The Rust preview checks the full matrix against this limit.</p>
+    <p class="hint">0 means no limit. The default matrix plans up to 1,145 tests, so set a limit on shared links.</p>
   </fieldset>`;
 
 const tuningFields = `
@@ -96,7 +112,7 @@ const tuningFields = `
     <label class="field" for="app-paths">
       <span>Application paths, one per line</span><textarea id="app-paths" rows="3" spellcheck="false"></textarea>
     </label>
-    <p class="hint">Review platform support and recovery requirements before any change.</p>
+    <p class="hint">Apply and Restore change Windows. Keep a backup and an independent way back before you start.</p>
   </fieldset>`;
 
 const advancedSettings = `
@@ -105,15 +121,17 @@ const advancedSettings = `
     <label class="field" for="advanced">
       <span>JSON override layer</span><textarea id="advanced" rows="6" spellcheck="false">{}</textarea>
     </label>
-    <p class="hint">Rust validates keys and values. Use this layer for detailed engine settings or loaded profiles.</p>
+    <p class="hint">Applied last, on top of the fields above. Rust validates every key; loaded profiles land here.</p>
     <label class="check"><input id="strict" type="checkbox">Reject unknown settings</label>
   </details>`;
 
 const measurement = `
-  <div id="measurement">
-    <div class="controls">
+  <div id="measurement" data-stage="configure">
+    <div class="flow-head">
       <h2 id="flow-title">Triage</h2>
-      <p id="flow-description" class="muted">Path and throughput together</p>
+      <p id="flow-description" class="lede">${e(flowEntry('triage').summary)}</p>
+    </div>
+    <div class="controls">
       <form id="configuration">
         ${pathFields}
         ${throughputFields}
@@ -127,15 +145,17 @@ const measurement = `
       </form>
     </div>
     <section class="preview" aria-labelledby="preview-title">
-      <h2 id="preview-title">Your preview</h2>
-      <p class="muted">Review targets, scope, and permissions before starting.</p>
-      <div id="capability" class="notice"></div>
+      <div class="preview-head">
+        <h2 id="preview-title">Plan</h2>
+        <ol class="lifecycle" aria-hidden="true"><li>Configure</li><li>Review</li><li>Run</li></ol>
+      </div>
+      <p id="capability" class="capability"></p>
       <p id="plan-state" role="status">Configure your workflow and review its plan.</p>
       <div id="plan-error" class="error" role="alert"></div>
       <div id="plan-summary"></div>
-      <details id="plan-details" hidden><summary>Resolved plan</summary><pre id="plan-json" tabindex="0"></pre></details>
+      <details id="plan-details" hidden><summary>Resolved plan (JSON)</summary><pre id="plan-json" tabindex="0"></pre></details>
       <div class="start-area">
-        <button id="start" disabled>Start reviewed run</button>
+        <button id="start" class="lamp" disabled>Start reviewed run</button>
         <p class="hint">Starting sends network traffic or performs the selected tuning action.</p>
       </div>
     </section>
@@ -145,13 +165,17 @@ const profileFlowOptions = measurementFlows.map(id => ({ value: id, label: flowE
 
 const profiles = `
   <section id="profiles" class="library" hidden>
-    <h2>Profiles</h2>
-    <p class="muted">Store reusable settings locally. Loaded profiles still require a fresh plan.</p>
-    ${field('store', 'Profile store', '.iperf3/profiles.json')}
-    <button id="load-profiles" class="secondary">Refresh profiles</button>
-    <p id="profiles-status" role="status"></p>
+    <div class="flow-head">
+      <h2>Profiles</h2>
+      <p class="lede">${e(flowEntry('profiles').summary)}</p>
+    </div>
+    <div class="source-row">
+      ${field('store', 'Profile store', '.iperf3/profiles.json')}
+      <button id="load-profiles" class="secondary">Refresh profiles</button>
+    </div>
+    <p id="profiles-status" class="library-status" role="status"></p>
     <div class="library-grid">
-      <div><h3>Saved profiles</h3><ul id="profile-list" class="item-list"></ul></div>
+      <div class="index-column"><h3>Saved profiles</h3><ul id="profile-list" class="item-list"></ul></div>
       <form id="profile-form">
         ${field('profile-name', 'Name', '', 'text', { required: true, maxlength: '128' })}
         ${select('profile-flow', 'Load into workflow', profileFlowOptions)}
@@ -163,7 +187,7 @@ const profiles = `
           <button id="use-profile" type="button" class="secondary">Load into workflow</button>
           <button id="delete-profile" type="button" class="danger">Delete</button>
         </div>
-        <p id="delete-confirm" hidden>Delete this saved profile? <button type="button" id="confirm-delete" class="danger">Confirm deletion</button>
+        <p id="delete-confirm" class="confirm" hidden><span>Delete this saved profile? This cannot be undone.</span><button type="button" id="confirm-delete" class="danger">Confirm deletion</button>
           <button type="button" id="keep-profile" class="secondary">Keep profile</button>
         </p>
       </form>
@@ -175,11 +199,12 @@ const reportDetail = `
     <h3>Selected report</h3>
     <div id="report-metadata"></div>
     <div class="actions">
-      <button id="rows-prev" class="secondary">Previous measurements</button>
-      <button id="rows-next" class="secondary">Next measurements</button>
-      <span id="rows-page"></span>
+      <button id="rows-prev" class="secondary compact">Previous measurements</button>
+      <button id="rows-next" class="secondary compact">Next measurements</button>
+      <span id="rows-page" class="page-label"></span>
     </div>
-    <pre id="report-rows" tabindex="0"></pre>
+    <pre id="report-rows" class="record" tabindex="0"></pre>
+    <h3>Compare and export</h3>
     <div class="two">
       ${field('baseline-path', 'Baseline report path')}
       ${field('export-path', 'Export destination', '', 'text', { placeholder: 'exports/review.json' })}
@@ -188,50 +213,53 @@ const reportDetail = `
       <button id="compare" class="secondary">Compare with baseline</button>
       <button id="export" class="secondary">Export JSON</button>
     </div>
-    <pre id="comparison" tabindex="0" hidden></pre>
+    <pre id="comparison" class="record" tabindex="0" hidden></pre>
   </section>`;
 
 const reports = `
   <section id="reports" class="library" hidden>
-    <h2>Reports</h2>
-    <p class="muted">Inspect recorded results and compare runs. Missing metrics remain unavailable.</p>
-    <div class="two">
-      ${field('report-directory', 'Results directory', 'results')}
-      ${field('report-path', 'Report path', '', 'text', { placeholder: 'results/run-id/summary.json' })}
+    <div class="flow-head">
+      <h2>Reports</h2>
+      <p class="lede">${e(flowEntry('reports').summary)} Missing metrics stay marked unavailable.</p>
     </div>
-    <div class="actions">
+    <div class="source-row">
+      ${field('report-directory', 'Results directory', 'results')}
       <button id="refresh-reports" class="secondary">Refresh runs</button>
+    </div>
+    <div class="source-row">
+      ${field('report-path', 'Report path', '', 'text', { placeholder: 'results/run-id/summary.json' })}
       <button id="read-report" class="secondary">Open report</button>
     </div>
-    <p id="reports-status" role="status"></p>
+    <p id="reports-status" class="library-status" role="status"></p>
     <div class="table-scroll">
-      <table>
-        <thead><tr><th>Run</th><th>Status</th><th>Measurements</th><th></th></tr></thead>
+      <table class="ledger">
+        <thead><tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col" class="figure">Measurements</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
         <tbody id="run-list"></tbody>
       </table>
     </div>
     <div class="actions">
-      <button id="runs-prev" class="secondary">Previous runs</button>
-      <button id="runs-next" class="secondary">Next runs</button>
-      <span id="runs-page"></span>
+      <button id="runs-prev" class="secondary compact">Previous runs</button>
+      <button id="runs-next" class="secondary compact">Next runs</button>
+      <span id="runs-page" class="page-label"></span>
     </div>
     ${reportDetail}
   </section>`;
 
 export const appMarkup = compact(`
   ${header}
-  <main>
-    <div class="intro"><h1>Investigate your network.</h1><p>Configure a workflow. Review its plan. Keep the evidence.</p></div>
-    <div id="runtime-notice" class="notice" role="status"></div>
-    ${helperPanel}
-    ${runStrip}
-    <div class="workbench">
-      ${navigation}
+  <div class="frame">
+    ${navigation}
+    <aside class="system" aria-label="Runtime">
+      ${helperPanel}
+      <p class="system-note">Runs locally. One measurement at a time. Every run starts from a reviewed plan.</p>
+    </aside>
+    <main class="desk">
+      <div id="runtime-notice" class="notice" role="status"></div>
+      ${runStrip}
       <section id="content" tabindex="-1">
         ${measurement}
         ${profiles}
         ${reports}
       </section>
-    </div>
-    <footer>Local Rust runtime · One active measurement · Review before execution</footer>
-  </main>`);
+    </main>
+  </div>`);

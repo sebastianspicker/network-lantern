@@ -12,6 +12,7 @@ function renderRun() {
   const run = state.run;
   $('run-strip').hidden = !run;
   if (!run) return;
+  $('run-strip').dataset.state = run.state;
   const summary = runSummary(run);
   if ($('run-title').textContent !== summary.title) $('run-title').textContent = summary.title;
   $('run-count').textContent = summary.count;

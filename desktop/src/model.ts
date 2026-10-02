@@ -113,16 +113,40 @@ export interface FlowEntry {
   id: Flow;
   label: string;
   description: string;
+  // One-sentence lede shown under the workflow title.
+  summary: string;
+  group: 'measure' | 'change' | 'records';
 }
 
 export const flows: readonly FlowEntry[] = [
-  { id: 'triage', label: 'Triage', description: 'Path and throughput together' },
-  { id: 'path', label: 'Path', description: 'Reachability and routing' },
-  { id: 'throughput', label: 'Throughput', description: 'Measure a test matrix' },
-  { id: 'baseline', label: 'Baseline', description: 'Path and one sample' },
-  { id: 'windows_tuning', label: 'Windows tuning', description: 'Review and recover settings' },
-  { id: 'profiles', label: 'Profiles', description: 'Reusable configurations' },
-  { id: 'reports', label: 'Reports', description: 'Browse and compare evidence' },
+  {
+    id: 'triage', label: 'Triage', description: 'Path, then throughput', group: 'measure',
+    summary: 'Trace the route to a host, then measure throughput against an iperf3 server you control.',
+  },
+  {
+    id: 'path', label: 'Path', description: 'Reachability and routing', group: 'measure',
+    summary: 'Ping, trace and TCP 443 checks to one host, with the basic suite or a continuous MTR-style trace.',
+  },
+  {
+    id: 'throughput', label: 'Throughput', description: 'iperf3 test matrix', group: 'measure',
+    summary: 'An iperf3-compatible matrix across protocols, streams, windows and DSCP classes. Check the test count before you start.',
+  },
+  {
+    id: 'baseline', label: 'Baseline', description: 'Path and one sample', group: 'measure',
+    summary: 'Path evidence plus a single throughput test: a reference point to compare later runs against.',
+  },
+  {
+    id: 'windows_tuning', label: 'Windows tuning', description: 'Verify, back up, apply, restore', group: 'change',
+    summary: 'Verify inspects the managed Windows QoS and power settings. Backup, Apply and Restore change system state.',
+  },
+  {
+    id: 'profiles', label: 'Profiles', description: 'Saved configurations', group: 'records',
+    summary: 'Settings you reuse, kept in a local store. A loaded profile still needs a fresh plan.',
+  },
+  {
+    id: 'reports', label: 'Reports', description: 'Recorded evidence', group: 'records',
+    summary: 'Runs recorded in a results directory. Page through measurements, compare with a baseline, or export.',
+  },
 ];
 
 export const measurementFlows: Flow[] = ['triage', 'path', 'throughput', 'baseline', 'windows_tuning'];
@@ -228,6 +252,115 @@ export function profileDestination(data: Json, selected: Flow): { flow: Flow; en
 export function plannedItems(step: Json): unknown {
   const plan = step.plan as Json | undefined;
   return plan?.total_tests ?? plan?.total_items ?? step.total_items ?? 'See resolved plan';
+}
+
+export type Tone = 'alert' | 'ok' | 'lamp';
+
+export interface PlanFact {
+  label: string;
+  value: string;
+  tone?: Tone;
+  // Spans the full row (host lists, server:port).
+  wide?: boolean;
+}
+
+export interface PlanEntry {
+  title: string;
+  facts: PlanFact[];
+  // Ordered operations, when the capability reports them (Windows tuning).
+  operations: string[];
+  warnings: string[];
+}
+
+const capabilityTitles: Record<string, string> = {
+  path_basic: 'Path · basic diagnostics',
+  path_trace: 'Path · continuous trace',
+  throughput: 'Throughput matrix',
+  tuning: 'Windows tuning',
+  workflow: 'Workflow',
+};
+
+const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
+const record = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {});
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+export function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count.toLocaleString('en-US')} ${count === 1 ? singular : plural}`;
+}
+
+// Nominal duration as the Rust planner estimates it; rounded for reading, never presented as exact.
+export function formatDuration(seconds: number): string {
+  if (seconds < 90) return `${Math.max(1, Math.round(seconds))} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} h ${rest} min` : `${hours} h`;
+}
+
+const acronyms: Record<string, string> = { qos: 'QoS', dscp: 'DSCP', udp: 'UDP', tcp: 'TCP', mtu: 'MTU', ttl: 'TTL' };
+
+export function sentenceCase(kind: string): string {
+  const words = kind.replaceAll('_', ' ').trim().replace(/\b[a-z]+\b/g, word => acronyms[word] ?? word);
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Hosts the plan names for the selected address families; throughput names its server and port.
+export function planTargets(step: Json): string[] {
+  const plan = record(step.plan);
+  const config = record(plan.config);
+  if (typeof config.target === 'string' && config.target) {
+    return [isCount(config.port) ? `${config.target}:${config.port}` : config.target];
+  }
+  const families = strings(plan.families);
+  const ipv4 = strings(plan.ipv4_hosts);
+  const ipv6 = strings(plan.ipv6_hosts);
+  if (!families.length) return [...ipv4, ...ipv6];
+  return [...(families.includes('ipv4') ? ipv4 : []), ...(families.includes('ipv6') ? ipv6 : [])];
+}
+
+export function planEntry(step: Json): PlanEntry {
+  const plan = record(step.plan);
+  const capability = String(step.capability ?? '');
+  const facts: PlanFact[] = [];
+  // The most consequential fact leads: whether this run changes the system.
+  if (typeof plan.mutating === 'boolean') {
+    facts.push(plan.mutating
+      ? { label: 'Windows settings', value: 'Changed by this run', tone: 'alert', wide: true }
+      : { label: 'Windows settings', value: 'Read only, nothing is changed', tone: 'ok', wide: true });
+  }
+  const targets = planTargets(step);
+  if (targets.length) facts.push({ label: targets.length === 1 ? 'Target' : 'Targets', value: targets.join('\n'), wide: true });
+
+  const items = plannedItems(step);
+  if (isCount(plan.total_tests)) facts.push({ label: 'Planned', value: countLabel(plan.total_tests, 'test') });
+  else if (isCount(items)) facts.push({ label: 'Planned', value: countLabel(items, 'planned item') });
+  else facts.push({ label: 'Planned', value: String(items) });
+
+  if (isCount(plan.estimated_test_seconds)) facts.push({ label: 'Nominal time', value: `≈ ${formatDuration(plan.estimated_test_seconds)}` });
+  if (typeof plan.within_budget === 'boolean') {
+    const limit = isCount(plan.max_total_tests) ? plan.max_total_tests : null;
+    if (!plan.within_budget) facts.push({ label: 'Budget', value: limit === null ? 'Over budget' : `Over the ${countLabel(limit, 'test')} limit`, tone: 'alert' });
+    else facts.push({ label: 'Budget', value: limit === null ? 'No limit set' : `Within ${countLabel(limit, 'test')}` });
+  }
+  const rounds = strings(plan.rounds);
+  if (rounds.length) facts.push({ label: rounds.length === 1 ? 'Round' : 'Rounds', value: rounds.join(', ') });
+  if (capability === 'path_trace') {
+    const types = strings(plan.types);
+    if (types.length) facts.push({ label: 'Probe types', value: types.join(', ') });
+  }
+
+  const config = record(plan.config);
+  if (capability === 'tuning' && typeof config.action === 'string') {
+    facts.push({ label: 'Action', value: typeof config.profile === 'string' ? `${config.action} · ${config.profile}` : config.action });
+  }
+  if (typeof plan.requiresHelper === 'boolean') {
+    facts.push({ label: 'Privileged helper', value: plan.requiresHelper ? 'Required' : 'Not required' });
+  }
+
+  const operations = (Array.isArray(plan.steps) ? plan.steps : []).map(record).filter(item => typeof item.kind === 'string')
+    .map(item => sentenceCase(item.kind as string) + (isCount(item.count) ? ` (${item.count.toLocaleString('en-US')})` : ''));
+  return { title: capabilityTitles[capability] ?? (capability ? sentenceCase(capability) : 'Plan'), facts, operations, warnings: strings(step.warnings) };
 }
 
 export function runSummary(run: Progress) {
