@@ -155,6 +155,7 @@ if (($pesterResult.TotalCount - $pesterResult.NotRunCount) -eq 0) {
   }
   throw 'Pester did not discover any tests.'
 }
-if ($pesterResult.Result -ne 'Passed') {
-  throw "Pester result was '$($pesterResult.Result)' with $($pesterResult.FailedCount) failed test(s)."
+$pesterFailureCount = $pesterResult.FailedCount + $pesterResult.FailedBlocksCount + $pesterResult.FailedContainersCount
+if ($pesterResult.Result -ne 'Passed' -or $pesterFailureCount -gt 0) {
+  throw "Pester result was '$($pesterResult.Result)': $($pesterResult.FailedCount) failed test(s), $($pesterResult.FailedBlocksCount) failed block(s), $($pesterResult.FailedContainersCount) failed container(s)."
 }
