@@ -110,7 +110,25 @@ function Test-NetworkTuningRestoreStagingInvariant {
     if ($null -eq $Session.SentinelStream -or $Session.SentinelStream.SafeFileHandle.IsClosed) {
       return [pscustomobject]@{ IsValid = $false; Message = 'Restore staging sentinel handle is not open.' }
     }
-    $sentinelText = Read-NetworkTuningBoundedTextFile -Path $expectedSentinelPath -MaximumBytes 128
+    # The session holds the sentinel open for writing, so on Windows a second
+    # handle must share Write. Other writers stay blocked by the session
+    # handle, which shares Read only.
+    $sentinelBytes = [byte[]]::new(129)
+    $sentinelLength = 0
+    $sentinelReader = [System.IO.File]::Open($expectedSentinelPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+      while ($sentinelLength -lt $sentinelBytes.Length) {
+        $bytesRead = $sentinelReader.Read($sentinelBytes, $sentinelLength, $sentinelBytes.Length - $sentinelLength)
+        if ($bytesRead -eq 0) { break }
+        $sentinelLength += $bytesRead
+      }
+    } finally {
+      $sentinelReader.Dispose()
+    }
+    if ($sentinelLength -gt 128) {
+      return [pscustomobject]@{ IsValid = $false; Message = 'Restore staging sentinel exceeds its maximum size.' }
+    }
+    $sentinelText = [System.Text.Encoding]::UTF8.GetString($sentinelBytes, 0, $sentinelLength)
     if ($sentinelText -cne [string]$Session.Nonce) {
       return [pscustomobject]@{ IsValid = $false; Message = 'Restore staging sentinel does not match the verified session.' }
     }

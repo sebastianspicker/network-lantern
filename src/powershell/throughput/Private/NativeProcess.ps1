@@ -37,7 +37,8 @@ function Get-Iperf3DescendantProcessSnapshot {
       }
     }
     else {
-      $psCommand = (Get-Command -Name ps -CommandType Application -ErrorAction Stop).Source
+      # -TotalCount 1: with /bin -> /usr/bin (usrmerge) on PATH, `ps` resolves twice.
+      $psCommand = (Get-Command -Name ps -CommandType Application -TotalCount 1 -ErrorAction Stop).Source
       $psInfo = [System.Diagnostics.ProcessStartInfo]::new()
       $psInfo.FileName = $psCommand
       $psInfo.ArgumentList.Add('-eo')

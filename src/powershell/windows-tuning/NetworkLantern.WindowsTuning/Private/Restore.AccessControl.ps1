@@ -53,7 +53,8 @@ function Test-NetworkTuningWindowsStagingAncestorChain {
         }
       }
 
-      $item = if ($item.PSIsContainer) { $item.Parent } else { $item.Directory }
+      # .Parent returns a plain DirectoryInfo without the provider-added PSIsContainer.
+      $item = if ($item -is [System.IO.DirectoryInfo]) { $item.Parent } else { $item.Directory }
     }
   } catch {
     return [pscustomobject]@{ IsTrusted = $false; Message = "Could not validate restore staging ancestors for '$Path': $($_.Exception.Message)" }

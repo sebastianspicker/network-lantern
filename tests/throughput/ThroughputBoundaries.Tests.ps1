@@ -4,6 +4,9 @@ BeforeAll {
   $script:RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
   $script:ModuleManifest = Join-Path $script:RepoRoot 'src/powershell/throughput/NetworkLantern.Throughput.psd1'
   Import-Module $script:ModuleManifest -Force
+  # CI runners are elevated (Windows admin, root in containers), where default
+  # and relative profile paths are refused. Tests of that guard mock $true.
+  Mock -ModuleName 'NetworkLantern.Throughput' Test-Iperf3ProcessIsElevated { $false }
 }
 
 Describe 'NetworkLantern.Throughput public boundaries' {

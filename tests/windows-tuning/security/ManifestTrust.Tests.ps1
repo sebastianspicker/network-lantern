@@ -244,6 +244,8 @@ Describe 'Windows tuning restore manifest trust' {
         }
         return [pscustomobject]@{ IsTrusted = $true; Message = '' }
       }
+      # Isolate the artifact ACL check from the real ACL of TestDrive.
+      Mock Test-NetworkTuningBackupPathTrust { [pscustomobject]@{ IsTrusted = $true; Message = '' } }
 
       $result = Test-NetworkTuningBackupWritePathTrust -BackupFolder $folder -ForceWindowsNamespace
 
@@ -254,6 +256,9 @@ Describe 'Windows tuning restore manifest trust' {
     It 'publishes a backup artifact only through a create-new sibling and final artifact' {
       $folder = Join-Path $TestDrive 'atomic-artifact-publication'
       New-Item -ItemType Directory -Path $folder -Force | Out-Null
+      # TestDrive is not an Administrators/SYSTEM-only namespace; the native ACL path is covered separately.
+      Mock Assert-NetworkTuningBackupWriteNamespace {}; Mock Protect-NetworkTuningAdminOnlyFile {}
+      Mock Test-NetworkTuningWindowsAdminOnlyPath { [pscustomobject]@{ IsTrusted = $true; Message = '' } }
 
       $published = Invoke-NetworkTuningBackupArtifactPublication -BackupFolder $folder -FileName $script:NetworkTuningBackupFilePowerplan -WriteTemporary {
         param($temporaryPath)

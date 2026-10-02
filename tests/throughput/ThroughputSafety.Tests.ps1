@@ -6,7 +6,14 @@ BeforeAll {
   Import-Module $script:ModuleManifest -Force
 }
 
+# CI runners are elevated (Windows admin, root in containers), where default and
+# relative profile paths are refused; that guard is covered in ThroughputBoundaries.
+# Each Describe mocks it because the first Describe re-imports the module, which
+# drops mocks bound to the previous module instance.
+
 Describe 'NetworkLantern.Throughput bounded native output' {
+  BeforeAll { Mock -ModuleName 'NetworkLantern.Throughput' Test-Iperf3ProcessIsElevated { $false } }
+
   It 'retains exact-limit output without reporting truncation' {
     InModuleScope 'NetworkLantern.Throughput' {
       $pwshPath = (Get-Process -Id $PID).Path
@@ -97,7 +104,8 @@ public static class ConcurrentConsoleWriter {
     InModuleScope 'NetworkLantern.Throughput' {
       $pwshPath = (Get-Process -Id $PID).Path
       $caps = [pscustomobject]@{ BidirSupported = $true; VersionText = 'fixture' }
-      $command = '$json = ''{"end":{"sum_sent":{"bits_per_second":2500000},"sum_received":{"bits_per_second":1750000}}}''; [Console]::Out.Write($json + (''😀'' * 6000))'
+      # Force UTF-8 so each emoji is 4 bytes; a Windows console code page would emit '?' and stay under 16 KiB.
+      $command = '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $json = ''{"end":{"sum_sent":{"bits_per_second":2500000},"sum_received":{"bits_per_second":1750000}}}''; [Console]::Out.Write($json + (''😀'' * 6000))'
       $result = Invoke-Iperf3 -Server example.local -Port 5201 -Stack IPv4 -Duration 1 -Omit 0 -Proto TCP -Dir TX -Caps $caps -Iperf3Path $pwshPath -NativeArgumentsOverride @('-NoProfile', '-NonInteractive', '-Command', $command)
 
       $result.ExitCode | Should -Be 0
@@ -111,6 +119,8 @@ public static class ConcurrentConsoleWriter {
 }
 
 Describe 'NetworkLantern.Throughput exact planning and budgets' {
+  BeforeAll { Mock -ModuleName 'NetworkLantern.Throughput' Test-Iperf3ProcessIsElevated { $false } }
+
   It 'returns exact default counts and estimates with and without bidirectional support' {
     InModuleScope 'NetworkLantern.Throughput' {
       $defaults = Get-NetworkThroughputDefaultParameterSet
@@ -275,6 +285,8 @@ Describe 'NetworkLantern.Throughput exact planning and budgets' {
 }
 
 Describe 'Throughput application budget surfaces and atomic artifacts' {
+  BeforeAll { Mock -ModuleName 'NetworkLantern.Throughput' Test-Iperf3ProcessIsElevated { $false } }
+
   It 'round-trips MaxTotalTests through a saved profile and the GUI binding helpers' {
     . (Join-Path $script:RepoRoot 'apps/throughput/Private/GuiBudget.ps1')
     $control = [pscustomobject]@{ Value = [decimal]0 }
@@ -302,10 +314,14 @@ Describe 'Throughput application budget surfaces and atomic artifacts' {
 
     $priorCli = $env:NETWORK_LANTERN_TEST_CLI
     $priorConfig = $env:NETWORK_LANTERN_TEST_CONFIG
+    $priorProfiles = $env:NETWORK_LANTERN_TEST_PROFILES
     try {
       $env:NETWORK_LANTERN_TEST_CLI = $cli
       $env:NETWORK_LANTERN_TEST_CONFIG = $config
-      $json = & pwsh -NoProfile -NonInteractive -Command '& $env:NETWORK_LANTERN_TEST_CLI -ConfigurationPath $env:NETWORK_LANTERN_TEST_CONFIG -MaxTotalTests 3 -WhatIf -PassThru -Quiet | ConvertTo-Json -Depth 6 -Compress'
+      # The child process is not mocked; an explicit absolute profiles path is
+      # accepted even when the runner is elevated.
+      $env:NETWORK_LANTERN_TEST_PROFILES = Join-Path $TestDrive 'budget-profiles.json'
+      $json = & pwsh -NoProfile -NonInteractive -Command '& $env:NETWORK_LANTERN_TEST_CLI -ConfigurationPath $env:NETWORK_LANTERN_TEST_CONFIG -ProfilesFile $env:NETWORK_LANTERN_TEST_PROFILES -MaxTotalTests 3 -WhatIf -PassThru -Quiet | ConvertTo-Json -Depth 6 -Compress'
       $LASTEXITCODE | Should -Be 0
       $result = $json | ConvertFrom-Json
       $result.MaxTotalTests | Should -Be 3
@@ -314,6 +330,7 @@ Describe 'Throughput application budget surfaces and atomic artifacts' {
     finally {
       $env:NETWORK_LANTERN_TEST_CLI = $priorCli
       $env:NETWORK_LANTERN_TEST_CONFIG = $priorConfig
+      $env:NETWORK_LANTERN_TEST_PROFILES = $priorProfiles
     }
   }
 
@@ -371,7 +388,8 @@ Describe 'Throughput application budget surfaces and atomic artifacts' {
 
       { Set-Iperf3TextFileAtomic -Path $destination -Text 'new destination' } | Should -Throw '*injected partial write failure*'
       [IO.File]::ReadAllText($destination) | Should -Be 'old destination'
-      @(Get-ChildItem -LiteralPath $TestDrive -Filter '.*.tmp').Count | Should -Be 0
+      # Only this test's temp: TestDrive is shared with the foreign-temp test above.
+      @(Get-ChildItem -LiteralPath $TestDrive -Filter '.partial-write.json.*.tmp' -Force).Count | Should -Be 0
     }
   }
 }
