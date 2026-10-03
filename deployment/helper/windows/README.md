@@ -23,6 +23,11 @@ also uses the per-user HMAC credential stored below
 `%ProgramData%\NetworkLanternHelper\clients`; the user gets read-only access to
 its credential and traversal access to the protected parent directories. Requests
 are capped at 1 MiB, connections at 64, and framing operations at five seconds.
+The state directories and files explicitly assign their owner and group to built-in
+Administrators, protect their DACLs, and are validated before either the service or
+client trusts stored identity or credential data. Registration refuses a pre-existing
+state object whose owner, group, or DACL differs from that contract. After removing
+the service, an administrator must remove such stale state before registering again.
 
 Removal first reserves the service's operation admission slot. It refuses while
 work is active, then launches the fixed `--remove-service` mode through UAC. The

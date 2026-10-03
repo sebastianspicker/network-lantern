@@ -102,12 +102,12 @@ function Resolve-ThroughputConfigurationPath {
   if ($Path -match '[\x00-\x1f]') {
     Write-ThroughputApplicationInputError -Message 'Configuration path contains control characters.' -TargetObject $Path
   }
-  $isRelative = -not [System.IO.Path]::IsPathRooted($Path)
+  $isRelative = -not [System.IO.Path]::IsPathFullyQualified($Path)
   if ($isRelative -and (Test-ThroughputProcessIsElevated)) {
     Write-ThroughputApplicationInputError -Message 'Relative configuration paths are refused when the process is elevated. Use an explicit absolute configuration path.' -TargetObject $Path
   }
   $base = [System.IO.Path]::GetFullPath($BasePath)
-  $resolved = if ([System.IO.Path]::IsPathRooted($Path)) {
+  $resolved = if ([System.IO.Path]::IsPathFullyQualified($Path)) {
     $candidate = [System.IO.Path]::GetFullPath($Path)
     if (Test-ThroughputPathUnderBase -BasePath $base -CandidatePath $candidate) {
       Assert-ThroughputRelativePathHasNoReparsePoint -BasePath $base -CandidatePath $candidate -PathDescription 'Configuration path'

@@ -39,10 +39,15 @@ use windows_sys::Win32::{
     },
     Security::{
         Authorization::{
-            ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
+            SE_FILE_OBJECT, SetNamedSecurityInfoW,
         },
-        GetTokenInformation, PSECURITY_DESCRIPTOR, RevertToSelf, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-        TOKEN_USER, TokenUser,
+        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl,
+        GetSecurityDescriptorDacl, GetSecurityDescriptorGroup, GetSecurityDescriptorOwner,
+        GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+        TOKEN_QUERY, TOKEN_USER, TokenUser,
     },
     Storage::FileSystem::{CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL},
     System::{
@@ -64,6 +69,15 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const CANCELLATION_GRACE: Duration = Duration::from_secs(10);
 const SERVER_CLEANUP_GRACE: Duration = Duration::from_secs(12);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(86_400);
+const OWNER_RECORD_SDDL: &str = "O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)";
+
+fn state_directory_sddl(owner_sid: &str) -> String {
+    format!("O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;{owner_sid})")
+}
+
+fn credential_sddl(owner_sid: &str) -> String {
+    format!("O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{owner_sid})")
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -537,78 +551,101 @@ fn secret_path(sid: &str) -> Result<PathBuf> {
 fn registered_owner() -> Result<String> {
     let path = owner_path()?;
     validate_regular_file(&path)?;
-    let value = std::fs::read_to_string(path)
+    validate_protected_path(&path, OWNER_RECORD_SDDL)?;
+    let value = std::fs::read_to_string(&path)
         .map_err(|error| HelperError::transport("read registered helper owner", error))?;
     let value = value.trim().to_owned();
     validate_owner_sid(&value)?;
+    validate_owner_state(&value)?;
     Ok(value)
 }
 
 fn read_secret(sid: &str) -> Result<[u8; 32]> {
+    validate_owner_sid(sid)?;
+    validate_owner_state(sid)?;
     let path = secret_path(sid)?;
     validate_regular_file(&path)?;
+    validate_protected_path(&path, &credential_sddl(sid))?;
     std::fs::read(path)
         .map_err(|error| HelperError::transport("read Windows helper credential", error))?
         .try_into()
         .map_err(|_| HelperError::Authentication)
 }
 
+fn validate_owner_state(owner_sid: &str) -> Result<()> {
+    let root = data_root()?;
+    let clients = root.join("clients");
+    let sddl = state_directory_sddl(owner_sid);
+    validate_regular_directory(&root)?;
+    validate_protected_path(&root, &sddl)?;
+    validate_regular_directory(&clients)?;
+    validate_protected_path(&clients, &sddl)
+}
+
 fn provision(owner_sid: &str) -> Result<()> {
     let root = data_root()?;
     let clients = root.join("clients");
     let owner_path = root.join("owner.sid");
-    let root_acl = format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;{owner_sid})");
-    create_protected_directory(&root, &root_acl)?;
+    let directory_sddl = state_directory_sddl(owner_sid);
+    let root_created = create_protected_directory(&root, &directory_sddl)?;
+    if root_created {
+        protect_path(&root, &directory_sddl)?;
+    } else {
+        validate_protected_path(&root, &directory_sddl)?;
+    }
+    let clients_created = create_protected_directory(&clients, &directory_sddl)?;
+    if clients_created {
+        protect_path(&clients, &directory_sddl)?;
+    } else {
+        validate_protected_path(&clients, &directory_sddl)?;
+    }
     let owner_exists = owner_path.exists();
-    if owner_exists && registered_owner()? != owner_sid {
+    if !owner_exists {
+        write_new(&owner_path, owner_sid.as_bytes(), OWNER_RECORD_SDDL)?;
+    }
+    validate_regular_file(&owner_path)?;
+    if owner_exists {
+        validate_protected_path(&owner_path, OWNER_RECORD_SDDL)?;
+    } else {
+        protect_path(&owner_path, OWNER_RECORD_SDDL)?;
+    }
+    if registered_owner()? != owner_sid {
         return Err(HelperError::Scope(
             "Windows helper is already provisioned for another owner".into(),
         ));
     }
-    protect_path(&root, &root_acl)?;
-    let clients_acl = format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;{owner_sid})");
-    create_protected_directory(&clients, &clients_acl)?;
-    protect_path(&clients, &clients_acl)?;
-    if !owner_exists {
-        write_new(
-            &owner_path,
-            owner_sid.as_bytes(),
-            "D:P(A;;FA;;;SY)(A;;FA;;;BA)",
-        )?;
-    }
-    validate_regular_file(&owner_path)?;
-    protect_path(&owner_path, "D:P(A;;FA;;;SY)(A;;FA;;;BA)")?;
     let key = clients.join(format!("{owner_sid}.key"));
-    if !key.exists() {
+    let key_exists = key.exists();
+    let key_sddl = credential_sddl(owner_sid);
+    if !key_exists {
         let mut secret = [0_u8; 32];
         rand::rng().fill_bytes(&mut secret);
-        write_new(
-            &key,
-            &secret,
-            &format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{owner_sid})"),
-        )?;
+        write_new(&key, &secret, &key_sddl)?;
     }
     validate_regular_file(&key)?;
-    protect_path(
-        &key,
-        &format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{owner_sid})"),
-    )?;
+    if key_exists {
+        validate_protected_path(&key, &key_sddl)?;
+    } else {
+        protect_path(&key, &key_sddl)?;
+    }
     Ok(())
 }
 
-fn create_protected_directory(path: &Path, sddl: &str) -> Result<()> {
+fn create_protected_directory(path: &Path, sddl: &str) -> Result<bool> {
     let wide_path = path
         .as_os_str()
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
     with_security_descriptor(sddl, |attributes| {
-        if unsafe { CreateDirectoryW(wide_path.as_ptr(), attributes) } == 0
-            && unsafe { GetLastError() } != ERROR_ALREADY_EXISTS
-        {
-            return Err(last("create protected helper directory"));
+        let created = unsafe { CreateDirectoryW(wide_path.as_ptr(), attributes) } != 0;
+        if !created {
+            if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+                return Err(last("create protected helper directory"));
+            }
         }
-        validate_regular_directory(path)
+        validate_regular_directory(path)?;
+        Ok(created)
     })
 }
 
@@ -697,38 +734,42 @@ fn purge_state() -> Result<()> {
 }
 
 fn protect_path(path: &Path, sddl: &str) -> Result<()> {
-    use windows_sys::Win32::Security::{
-        Authorization::{SE_FILE_OBJECT, SetNamedSecurityInfoW},
-        DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
-    };
     let mut wide_path = path
         .as_os_str()
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
     with_security_descriptor(sddl, |attributes| {
+        let descriptor = unsafe { (*attributes).lpSecurityDescriptor };
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut group: PSID = std::ptr::null_mut();
+        let mut owner_defaulted = 0;
+        let mut group_defaulted = 0;
         let mut present = 0;
         let mut defaulted = 0;
         let mut dacl = std::ptr::null_mut();
-        if unsafe {
-            GetSecurityDescriptorDacl(
-                (*attributes).lpSecurityDescriptor,
-                &mut present,
-                &mut dacl,
-                &mut defaulted,
-            )
-        } == 0
+        if unsafe { GetSecurityDescriptorOwner(descriptor, &mut owner, &mut owner_defaulted) } == 0
+            || owner.is_null()
+            || unsafe { GetSecurityDescriptorGroup(descriptor, &mut group, &mut group_defaulted) }
+                == 0
+            || group.is_null()
+            || unsafe {
+                GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
+            } == 0
             || present == 0
         {
-            return Err(last("read helper DACL"));
+            return Err(last("read helper security descriptor"));
         }
         let status = unsafe {
             SetNamedSecurityInfoW(
                 wide_path.as_mut_ptr(),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                OWNER_SECURITY_INFORMATION
+                    | GROUP_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
+                owner,
+                group,
                 dacl,
                 std::ptr::null(),
             )
@@ -741,7 +782,79 @@ fn protect_path(path: &Path, sddl: &str) -> Result<()> {
                 std::io::Error::from_raw_os_error(status as i32),
             ))
         }
-    })
+    })?;
+    validate_protected_path(path, sddl)
+}
+
+fn validate_protected_path(path: &Path, expected_sddl: &str) -> Result<()> {
+    let mut wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide_path.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(HelperError::transport(
+            "read helper path security",
+            std::io::Error::from_raw_os_error(status as i32),
+        ));
+    }
+    let result = (|| {
+        let mut control = 0;
+        let mut revision = 0;
+        if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+            || control & SE_DACL_PROTECTED == 0
+        {
+            return Err(HelperError::Authentication);
+        }
+        let actual = descriptor_sddl(descriptor)?;
+        let expected = with_security_descriptor(expected_sddl, |attributes| {
+            descriptor_sddl(unsafe { (*attributes).lpSecurityDescriptor })
+        })?;
+        let alternate =
+            expected.replacen("(A;;FA;;;SY)(A;;FA;;;BA)", "(A;;FA;;;BA)(A;;FA;;;SY)", 1);
+        if actual != expected && actual != alternate {
+            return Err(HelperError::Authentication);
+        }
+        Ok(())
+    })();
+    unsafe { LocalFree(descriptor.cast()) };
+    result
+}
+
+fn descriptor_sddl(descriptor: PSECURITY_DESCRIPTOR) -> Result<String> {
+    let mut value = std::ptr::null_mut();
+    let mut length = 0;
+    if unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor,
+            1,
+            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut value,
+            &mut length,
+        )
+    } == 0
+    {
+        return Err(last("encode helper security descriptor"));
+    }
+    let text =
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(value, length as usize) })
+            .trim_end_matches('\0')
+            .to_owned();
+    unsafe { LocalFree(value.cast()) };
+    Ok(text)
 }
 
 fn with_security_descriptor<T>(
@@ -832,10 +945,28 @@ mod tests {
         let owner = "S-1-5-21-100-200-300-1001";
         for sddl in [
             format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{owner})"),
-            format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;{owner})"),
-            format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{owner})"),
+            state_directory_sddl(owner),
+            OWNER_RECORD_SDDL.to_owned(),
+            credential_sddl(owner),
         ] {
             with_security_descriptor(&sddl, |_| Ok(())).unwrap();
         }
+    }
+
+    #[test]
+    fn state_descriptors_assign_privileged_ownership_and_read_only_user_access() {
+        let owner = "S-1-5-21-100-200-300-1001";
+        for sddl in [
+            state_directory_sddl(owner),
+            OWNER_RECORD_SDDL.to_owned(),
+            credential_sddl(owner),
+        ] {
+            assert!(sddl.starts_with("O:BAG:BAD:P"));
+            assert!(!sddl.contains(";;;WD"));
+            assert!(!sddl.contains(";;;AU"));
+        }
+        assert!(state_directory_sddl(owner).contains(&format!("(A;;FRFX;;;{owner})")));
+        assert!(credential_sddl(owner).contains(&format!("(A;;FR;;;{owner})")));
+        assert!(!OWNER_RECORD_SDDL.contains(owner));
     }
 }

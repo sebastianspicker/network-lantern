@@ -60,6 +60,14 @@ Describe 'Throughput application adapters' {
     finally { Pop-Location }
   }
 
+  It 'rejects incompletely qualified Windows configuration paths while elevated' -Skip:(-not $IsWindows) {
+    . (Join-Path $script:RepoRoot 'apps/throughput/Private/ThroughputModuleAdapter.ps1')
+    Mock Test-ThroughputProcessIsElevated { $true }
+
+    { Resolve-ThroughputConfigurationPath -Path 'C:config.json' -BasePath $TestDrive } | Should -Throw '*Relative configuration paths are refused when the process is elevated*'
+    { Resolve-ThroughputConfigurationPath -Path '\config.json' -BasePath $TestDrive } | Should -Throw '*Relative configuration paths are refused when the process is elevated*'
+  }
+
   It 'rejects a relative configuration path that reaches outside cwd through a symbolic link' {
     $cli = Join-Path $script:RepoRoot 'apps/throughput/Measure-NetworkThroughput.ps1'
     $outside = Join-Path (Split-Path -Parent $TestDrive) ("throughput-config-outside-" + [guid]::NewGuid().ToString('N'))
@@ -389,6 +397,10 @@ Describe 'NetworkLantern.Throughput artifact and profile behavior' {
         { Get-Iperf3ProfileNames -ProfilesFile 'relative/profiles.json' } | Should -Throw '*Relative profile paths are refused when the process is elevated*'
         { Remove-Iperf3Profile -ProfileName 'missing' -Confirm:$false } | Should -Throw '*Default profile paths are refused when the process is elevated*'
         { Remove-Iperf3Profile -ProfileName 'missing' -ProfilesFile 'relative/profiles.json' -Confirm:$false } | Should -Throw '*Relative profile paths are refused when the process is elevated*'
+        if ($IsWindows) {
+          { Resolve-ProfilesFilePath -ProfilesFile 'C:profiles.json' } | Should -Throw '*Relative profile paths are refused when the process is elevated*'
+          { Resolve-ProfilesFilePath -ProfilesFile '\profiles.json' } | Should -Throw '*Relative profile paths are refused when the process is elevated*'
+        }
 
         $defaultLocation = Get-DefaultProfilesFilePath
         { Resolve-ProfilesFilePath -ProfilesFile $defaultLocation -Provenance Default } | Should -Throw '*Default profile paths are refused when the process is elevated*'

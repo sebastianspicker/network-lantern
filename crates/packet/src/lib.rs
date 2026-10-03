@@ -106,6 +106,13 @@ pub struct MplsLabel {
     pub ttl: u8,
 }
 
+/// Maximum RFC 4950 labels retained from one ICMP response.
+///
+/// Real paths use far fewer labels. Keeping the budget at the packet parser
+/// bounds every downstream sample and aggregate before optional metadata is
+/// retained or serialized.
+pub const MAX_MPLS_LABELS_PER_RESPONSE: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedIcmp {
     pub family: AddressFamily,
@@ -546,6 +553,13 @@ pub fn parse_mpls_extensions(bytes: &[u8]) -> Result<Vec<MplsLabel>, PacketError
             if !payload.len().is_multiple_of(4) {
                 return Err(PacketError::Malformed("misaligned MPLS label stack"));
             }
+            let object_labels = payload.len() / 4;
+            if labels.len().saturating_add(object_labels) > MAX_MPLS_LABELS_PER_RESPONSE {
+                return Err(PacketError::Malformed(
+                    "MPLS label stack exceeds supported limit",
+                ));
+            }
+            labels.reserve(object_labels);
             for word in payload.chunks_exact(4) {
                 let value = be_u32(word);
                 labels.push(MplsLabel {
@@ -659,6 +673,17 @@ mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
+    fn mpls_extension(objects: &[(u8, u8, usize)]) -> Vec<u8> {
+        let mut extension = vec![0x20, 0, 0, 0];
+        for &(class_num, c_type, label_count) in objects {
+            let length = 4 + label_count * 4;
+            extension.extend_from_slice(&(length as u16).to_be_bytes());
+            extension.extend_from_slice(&[class_num, c_type]);
+            extension.resize(extension.len() + label_count * 4, 0);
+        }
+        extension
+    }
+
     #[test]
     fn checksum_matches_rfc_1071_vector() {
         assert_eq!(
@@ -723,6 +748,43 @@ mod tests {
         assert!(!labels[0].bottom_of_stack);
         assert_eq!(labels[1].label, 2);
         assert!(labels[1].bottom_of_stack);
+    }
+
+    #[test]
+    fn bounds_cumulative_mpls_labels_before_retention() {
+        let exact = mpls_extension(&[(1, 1, MAX_MPLS_LABELS_PER_RESPONSE)]);
+        assert_eq!(
+            parse_mpls_extensions(&exact).unwrap().len(),
+            MAX_MPLS_LABELS_PER_RESPONSE
+        );
+
+        let oversized = mpls_extension(&[(1, 1, MAX_MPLS_LABELS_PER_RESPONSE + 1)]);
+        assert_eq!(
+            parse_mpls_extensions(&oversized),
+            Err(PacketError::Malformed(
+                "MPLS label stack exceeds supported limit"
+            ))
+        );
+
+        let cumulative = mpls_extension(&[(1, 1, 40), (1, 1, 25)]);
+        assert_eq!(
+            parse_mpls_extensions(&cumulative),
+            Err(PacketError::Malformed(
+                "MPLS label stack exceeds supported limit"
+            ))
+        );
+    }
+
+    #[test]
+    fn ignores_unknown_extension_objects_for_mpls_budget() {
+        let extension = mpls_extension(&[
+            (99, 1, MAX_MPLS_LABELS_PER_RESPONSE + 1),
+            (1, 1, MAX_MPLS_LABELS_PER_RESPONSE),
+        ]);
+        assert_eq!(
+            parse_mpls_extensions(&extension).unwrap().len(),
+            MAX_MPLS_LABELS_PER_RESPONSE
+        );
     }
 
     #[test]

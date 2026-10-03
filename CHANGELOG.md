@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Security fixes
+
+- Require explicit Administrators ownership and exact protected ACLs for Windows
+  helper identity and credential state, including validation before startup reads.
+- Treat Windows drive-relative and root-relative throughput profile and
+  configuration paths as relative for elevated-operation policy.
+- Bound RFC 4950 MPLS metadata to 64 labels per response before any path engine
+  can retain or aggregate the network-controlled values.
+
 ### Interface redesign ("Logbook & Lamp")
 
 - Desktop and planner share one token set and bundled OFL fonts (Atkinson

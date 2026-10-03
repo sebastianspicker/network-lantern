@@ -44,7 +44,7 @@ function Resolve-ProfilesFilePath {
   if ($ProfilesFile -match '[\x00-\x1f]') {
     Write-Iperf3Error -Message 'ProfilesFile path contains control characters.' -ErrorId 'NetworkLantern.Throughput.InputValidation' -TargetObject $ProfilesFile
   }
-  if ([System.IO.Path]::IsPathRooted($ProfilesFile)) {
+  if ([System.IO.Path]::IsPathFullyQualified($ProfilesFile)) {
     $candidate = [System.IO.Path]::GetFullPath($ProfilesFile)
   }
   else {
