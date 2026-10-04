@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn rejects_replay_and_tampering() {
         let secret = [7; 32];
-        let nonce = [9; 32];
+        let nonce: [u8; 32] = rand::random();
         let frame = sign(&secret, nonce, b"body".to_vec()).unwrap();
         verify(&secret, &frame).unwrap();
         let mut cache = ReplayCache::default();
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn rejects_stale_and_future_frames() {
         let secret = [4; 32];
-        let mut stale = sign(&secret, [5; 32], b"body".to_vec()).unwrap();
+        let mut stale = sign(&secret, rand::random(), b"body".to_vec()).unwrap();
         stale.issued_at_unix_ms -= 10 * 60 * 1_000;
         stale.authenticator =
             authenticator(&secret, &stale.nonce, stale.issued_at_unix_ms, &stale.body);
@@ -465,7 +465,7 @@ mod tests {
             verify(&secret, &stale),
             Err(HelperError::Authentication)
         ));
-        let mut future = sign(&secret, [6; 32], b"body".to_vec()).unwrap();
+        let mut future = sign(&secret, rand::random(), b"body".to_vec()).unwrap();
         future.issued_at_unix_ms += 60 * 1_000;
         future.authenticator = authenticator(
             &secret,

@@ -372,7 +372,6 @@ mod tests {
     use super::*;
     use crate::protocol::{reviewed_hash, sign};
     use lantern_tuning::{TuningConfig, plan};
-    use rand::RngCore;
 
     fn frame(secret: &[u8; 32], run_id: Uuid) -> SignedFrame {
         let plan = plan(&TuningConfig {
@@ -386,8 +385,7 @@ mod tests {
             reviewed_plan_hash: reviewed_hash(&operation).unwrap(),
             operation,
         };
-        let mut nonce = [0; 32];
-        rand::rng().fill_bytes(&mut nonce);
+        let nonce: [u8; 32] = rand::random();
         sign(secret, nonce, serde_json::to_vec(&request).unwrap()).unwrap()
     }
 

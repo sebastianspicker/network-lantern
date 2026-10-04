@@ -25,7 +25,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use windows_sys::{
     Win32::{
-        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LocalFree},
+        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_DATA, ERROR_SUCCESS, LocalFree},
         Security::{
             Authorization::{
                 ConvertSecurityDescriptorToStringSecurityDescriptorW,
@@ -1062,7 +1062,11 @@ fn active_power_plan() -> Result<String> {
     if status != ERROR_SUCCESS {
         return Err(win32("read active power plan", status));
     }
-    let guid = unsafe { *pointer };
+    // SAFETY: on success PowerGetActiveScheme stores a valid, LocalAlloc'd GUID
+    // pointer; `as_ref` turns a null result into `None` before any read.
+    let Some(guid) = (unsafe { pointer.as_ref() }).copied() else {
+        return Err(win32("read active power plan", ERROR_INVALID_DATA));
+    };
     unsafe { LocalFree(pointer.cast()) };
     Ok(format!(
         "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",

@@ -5,7 +5,6 @@ use crate::{
     },
 };
 use lantern_tuning::{TuningPlan, TuningResult};
-use rand::RngCore;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -192,8 +191,7 @@ impl HelperClient {
         request.validate()?;
         let body = serde_json::to_vec(&request)
             .map_err(|error| HelperError::Protocol(format!("encode request: {error}")))?;
-        let mut nonce = [0; 32];
-        rand::rng().fill_bytes(&mut nonce);
+        let nonce: [u8; 32] = rand::random();
         let frame = sign(&platform::load_secret()?, nonce, body)?;
         platform::request(frame, cancellation).await
     }
