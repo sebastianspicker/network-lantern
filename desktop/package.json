@@ -27,5 +27,8 @@
     "@wdio/tauri-service": "^1.0.0",
     "@wdio/tauri-plugin": "^1.0.0",
     "@wdio/globals": "^9.24.0"
+  },
+  "overrides": {
+    "serialize-javascript": "7.0.5"
   }
 }
