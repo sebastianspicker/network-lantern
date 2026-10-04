@@ -5,12 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
-    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "test": "vitest run",
-    "build": "npm run check && vite build && node scripts/check-production.mjs",
-    "build:e2e": "npm run check && vite build --mode e2e && node scripts/build-native.mjs",
-    "test:native": "node scripts/run-native.mjs",
-    "test:browser": "playwright test"
+    "check": "tsc --noEmit",
+    "build": "npm run check && vite build && node scripts/check-production.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1"

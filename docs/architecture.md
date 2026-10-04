@@ -312,18 +312,13 @@ static planner tests. The static planner is served as ordinary files, and
 - Preserve output schemas, exit codes, locking, cancellation, timeout, backup,
   and restore compatibility unless a deliberate external change is documented.
 
-Architecture rules are enforced mechanically:
-
-- `tests/architecture/RepositoryArchitecture.Tests.ps1` (Pester): stable legacy
-  adapters, module and Bash loader rules, manifest/export agreement, dependency
-  direction, workflow separation, the static planner boundary, and the exact set
-  of executable files in Git.
-- `tests/architecture/rust-boundaries.test.cjs` (Node): the exact internal crate
-  dependency edges, engines spawn no CLI tools, packet parsing stays free of IO, the planner has no persistence, and the
-  production desktop grants no test permissions.
-- `tests/architecture/default-hosts.test.cjs` (Node): the default path targets
-  agree across `config/hosts.conf`, both legacy path engines, and both Rust path
-  engines.
+Architecture rules are reviewed with each change: stable legacy adapters, module
+and Bash loader rules, manifest/export agreement, dependency direction, workflow
+separation, the static planner boundary, the exact internal crate dependency
+edges, no CLI tools spawned by the engines, packet parsing free of IO, a planner
+without persistence, no test permissions in the production desktop, and agreeing
+default path targets across `config/hosts.conf` and the legacy and Rust path
+engines.
 
 The complete validation command is documented in [TESTING.md](TESTING.md).
 
@@ -331,8 +326,7 @@ The complete validation command is documented in [TESTING.md](TESTING.md).
 
 Crates depend in one direction, from vocabulary to engines to the application
 facade to adapters. Cargo only rejects cycles, so
-`tests/architecture/rust-boundaries.test.cjs` lists every allowed internal edge
-and fails on any other.
+the diagram below lists every allowed internal edge.
 
 ```mermaid
 flowchart TD
@@ -406,8 +400,7 @@ Rust plans run without DNS, sockets, helper authorization, or result writes.
 Execution records include the engine and version, and legacy profiles and reports
 are read and normalized without rewriting their sources or supplying absent
 metrics. Wire names shared with the desktop (`RunState`, `ErrorCategory`) are
-pinned by `tests/fixtures/contracts/wire-enums.json`, which a runtime test and a
-desktop unit test both check.
+pinned by variant-order checks in the runtime crate.
 
 The helper client and server stay in one crate because they share the protocol
 and the per-platform transports; splitting them would move Windows and macOS
@@ -467,7 +460,7 @@ at risk for code that is scheduled for removal:
 ## Repository layout
 
 The top-level split (`crates/` and `desktop/` for Rust, `apps/` and `src/` for the
-legacy reference, `site/`, `tests/`, `scripts/`) follows the two-implementation
+legacy reference, `site/`, `scripts/`) follows the two-implementation
 model. A capability-first layout was rejected. It would have rewritten about 100
 path references in tests, scripts, docs, and CI for the legacy tree without
 changing behavior, and that tree is scheduled for archival.

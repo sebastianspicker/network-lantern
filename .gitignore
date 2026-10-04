@@ -153,3 +153,18 @@ Thumbs.db
 /desktop/dist/
 /desktop/test-results/
 /desktop/src-tauri/gen/
+
+# Internal design and test files (not published)
+/DESIGN_BRIEF.md
+/tests/
+/crates/cli/tests/
+/crates/runtime/tests/
+/crates/throughput/tests/
+/desktop/tests/
+/desktop/tsconfig.tests.json
+/desktop/vitest.config.ts
+/desktop/playwright.config.ts
+/desktop/wdio.conf.ts
+/desktop/scripts/run-native.mjs
+/desktop/scripts/native-environment.mjs
+/desktop/scripts/build-native.mjs

@@ -38,23 +38,6 @@ struct Counts {
     total: u64,
 }
 
-#[cfg(test)]
-pub(crate) async fn execute_request(
-    value: &Value,
-    out: &Path,
-    manager: &RunManager,
-    cancel: &CancellationToken,
-) -> Result<(Value, u8)> {
-    execute_request_with_exit_code(
-        value,
-        out,
-        manager,
-        cancel,
-        &std::sync::atomic::AtomicU8::new(exit::CANCELLED),
-    )
-    .await
-}
-
 pub async fn execute_request_with_exit_code(
     value: &Value,
     out: &Path,
@@ -431,54 +414,5 @@ mod tests {
         assert_eq!(summary["exit_code"], 143);
         assert_eq!(summary["status"], "Cancelled");
         assert_eq!(summary["counts"]["total"], 0);
-    }
-    fn key_paths(value: &Value, prefix: &str, paths: &mut std::collections::BTreeSet<String>) {
-        match value {
-            Value::Object(map) => {
-                for (key, child) in map {
-                    let path = if prefix.is_empty() {
-                        key.clone()
-                    } else {
-                        format!("{prefix}.{key}")
-                    };
-                    paths.insert(path.clone());
-                    key_paths(child, &path, paths);
-                }
-            }
-            Value::Array(items) => {
-                for item in items {
-                    key_paths(item, &format!("{prefix}[]"), paths);
-                }
-            }
-            _ => {}
-        }
-    }
-    #[tokio::test]
-    async fn summary_key_set_matches_golden() {
-        let dir =
-            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
-        let request = json!({"capability":"throughput","layers":[{"target":"fixture.invalid","single_test":true}]});
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        let (summary, _) = execute_request(&request, dir.path(), &RunManager::default(), &cancel)
-            .await
-            .unwrap();
-        let written: Value = serde_json::from_slice(
-            &std::fs::read(
-                dir.path()
-                    .join(summary["run_id"].as_str().unwrap())
-                    .join("summary.json"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(written, summary);
-        let mut paths = std::collections::BTreeSet::new();
-        key_paths(&written, "", &mut paths);
-        let golden = include_str!("../tests/fixtures/summary-keys.txt")
-            .lines()
-            .map(str::to_owned)
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(paths, golden);
     }
 }

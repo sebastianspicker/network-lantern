@@ -12,18 +12,16 @@ simulate a successful result.
 - `src/tokens.css` defines the design tokens (type, space, colour roles for light
   and dark) and loads the bundled Atkinson Hyperlegible fonts from `src/fonts/`.
   The planner uses a byte-identical copy in `site/`; edit both together.
-  `src/style.css` builds every component from these tokens. The rationale is in
-  `DESIGN_BRIEF.md`.
+  `src/style.css` builds every component from these tokens.
 - `src/markup.ts` holds the static page structure. Element ids are a contract with
-  the browser and native tests; `tests/fixtures/dom-contract.json` records them.
+  the scripts that bind to them.
 - `src/state.ts` is the single view-state object, including the generation
   counters that discard stale responses.
 - `src/model.ts` (requests, fingerprints, run summaries) and `src/render.ts`
-  (escaped markup fragments) are pure and unit-tested.
+  (escaped markup fragments) are pure.
 - `src/plan.ts`, `run.ts`, `profiles.ts`, `reports.ts`, `runtime.ts`,
   `navigation.ts`, `measurement.ts` and `library.ts` each own one view concern.
-- `src/bridge.ts` is the only module that calls Tauri. Browser tests replace it by
-  path, so keep its location and its `native` and `command` exports.
+- `src/bridge.ts` is the only module that calls Tauri. Keep its location and its `native` and `command` exports.
 
 ## Commands
 
@@ -32,23 +30,13 @@ From this directory:
 ```sh
 npm ci
 npm run check
-npm test
 npm run build
-npm run test:browser
-npm run build:e2e
-npm run test:native
 ```
 
-`npm run dev` serves the interface at `http://127.0.0.1:1420`. Browser tests use
-that exact address and start the server if it is not already running. Screenshots
-and test artifacts go to the operating system temporary directory.
+`npm run dev` serves the interface at `http://127.0.0.1:1420`.
 
-The native test build enables the Cargo `e2e` and embedded-asset protocol
-features, merges `src-tauri/tauri.e2e.conf.json`, and builds Vite in `e2e` mode.
-The production frontend excludes the WebdriverIO plugin. Native tests drive real
-Rust commands through the embedded WebDriver provider, using temporary local
-profile and report files; one cancellation test opens a bounded local TCP
-listener. They do not run external probes or privileged tuning.
+The production frontend excludes the WebdriverIO plugin; `scripts/check-production.mjs`
+fails the build if instrumentation reaches a production asset.
 
 The seven flows share one review-then-start lifecycle. Changing a field, output
 path, workflow, or loaded profile invalidates the preview. A single active run

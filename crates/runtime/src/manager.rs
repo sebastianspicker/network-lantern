@@ -334,13 +334,5 @@ mod tests {
             };
             assert_eq!(index, position);
         }
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/contracts/wire-enums.json"
-        ))
-        .unwrap();
-        assert_eq!(
-            serde_json::json!({"run_state":run_states,"error_category":categories}),
-            fixture
-        );
     }
 }

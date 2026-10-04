@@ -207,7 +207,6 @@ verified on matching hosts, so treat the Rust surfaces as in-progress. See
 | `src/powershell/workflow/` | Pure profile and ordered workflow-plan builder |
 | `site/` | Static command planner |
 | `scripts/` | Development, verification, and shell wrappers; not a product API |
-| `tests/` | Legacy capability suites, architecture checks, and shared contract fixtures (Rust tests live in each crate) |
 
 See [docs/architecture.md](docs/architecture.md) for component ownership,
 dependency direction, runtime flows, and security boundaries.
@@ -227,7 +226,6 @@ Narrower checks while iterating:
 
 ```bash
 make lint
-make test-bash
 make test-pwsh
 make test
 ```

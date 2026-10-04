@@ -1,6 +1,6 @@
 /*
  * Network Lantern design tokens: "Logbook & Lamp".
- * Shared verbatim by desktop/src/tokens.css and site/tokens.css; tests/site/tokens.test.cjs keeps them identical.
+ * Shared verbatim by desktop/src/tokens.css and site/tokens.css; keep them identical.
  * Colour is consequence: ink and paper for everything calm, lamp amber only where the network will feel it,
  * alert red only where something is changed or removed.
  */

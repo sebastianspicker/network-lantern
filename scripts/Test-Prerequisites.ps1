@@ -33,7 +33,7 @@ function Add-PrerequisiteCheck {
 $powerShellReady = $PSVersionTable.PSVersion.Major -ge 7
 Add-PrerequisiteCheck -Name 'PowerShell 7+' -Available $powerShellReady -Detail $PSVersionTable.PSVersion.ToString()
 
-foreach ($commandName in @('git', 'bash', 'shellcheck', 'bats', 'jq')) {
+foreach ($commandName in @('git', 'bash', 'shellcheck')) {
   $command = Get-Command -Name $commandName -ErrorAction SilentlyContinue
   $detail = if ($command) { $command.Source } else { 'not found on PATH' }
   Add-PrerequisiteCheck -Name $commandName -Available ([bool]$command) -Detail $detail
@@ -58,7 +58,6 @@ foreach ($commandName in @('cargo', 'npm')) {
 
 foreach ($moduleRequirement in @(
     [pscustomobject]@{ Name = 'PSScriptAnalyzer'; Version = [version]'1.24.0' }
-    [pscustomobject]@{ Name = 'Pester'; Version = [version]'5.7.1' }
   )) {
   $module = Get-Module -ListAvailable -Name $moduleRequirement.Name |
     Where-Object { $_.Version -eq $moduleRequirement.Version } |

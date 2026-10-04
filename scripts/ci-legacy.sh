@@ -13,26 +13,7 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v bats >/dev/null 2>&1; then
-  echo "bats not found. Install bats first; the local gate requires the Bash test suite." >&2
-  exit 1
-fi
-
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq not found. Install jq first; the Bash JSON validation tests require it." >&2
-  exit 1
-fi
-
-if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'; then
-  echo "Node.js 22+ is required for the static planner tests." >&2
-  exit 1
-fi
-
 make -C "$REPO_ROOT" lint
-
-bats "$REPO_ROOT/tests/path/contracts.bats" "$REPO_ROOT/tests/path/bash"
-
-node --test "$REPO_ROOT"/tests/site/*.test.cjs
 
 pwsh -NoProfile -NonInteractive -File "$REPO_ROOT/scripts/Invoke-SecretScan.ps1"
 ci_args=(-NoInstall)

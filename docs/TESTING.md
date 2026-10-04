@@ -8,19 +8,16 @@ settings.
 
 | Dependency | Version | Used by |
 | --- | --- | --- |
-| PowerShell | 7+ | Modules, scripts, and Pester |
+| PowerShell | 7+ | Modules and scripts |
 | PSScriptAnalyzer | 1.24.0 | PowerShell static analysis |
-| Pester | 5.7.1 | PowerShell behavior and architecture tests |
-| Bash | 4+ for the product path CLI | Bash scripts and tests |
+| Bash | 4+ for the product path CLI | Bash scripts |
 | ShellCheck | Not pinned | Bash static analysis |
-| Bats | Not pinned | Bash tests |
-| `jq` | Not pinned | Bash JSON assertions |
 | Git | Not pinned | Prerequisite reporting and contributor checks |
-| Node.js | 22+ | Static planner and desktop checks; development only |
+| Node.js | 22+ | Desktop checks; development only |
 | Rust | 1.96.0 | Pinned Cargo workspace and native desktop builds |
 
 `iperf3`, `mtr`, and `column` are operator dependencies, not requirements for the
-automated test gate.
+automated gate.
 
 Inspect the current environment without installing anything:
 
@@ -46,27 +43,21 @@ From Bash, Git Bash, or WSL:
 This is the authoritative pre-completion gate. It runs `scripts/ci-legacy.sh`
 and then `scripts/ci-rust.sh`; either can be run alone while iterating.
 
-`scripts/ci-legacy.sh` first checks that `pwsh`, ShellCheck, Bats, `jq`, and
-Node.js 22+ are available, then runs, in order:
+`scripts/ci-legacy.sh` first checks that `pwsh` and ShellCheck are available,
+then runs, in order:
 
-1. `make lint`: ShellCheck (`-x`) over every tracked shell script, including the
-   Bats `mtr` fakes. The
+1. `make lint`: ShellCheck (`-x`) over every tracked shell script. The
    `SHELL_SCRIPTS` list in the `Makefile` is the only ShellCheck file list.
-2. The Bash path entrypoint contracts and all Bats tests under `tests/path/bash/`.
-3. Node's built-in test runner over `tests/site/*.test.cjs`.
-4. `scripts/Invoke-SecretScan.ps1`.
-5. `scripts/ci.ps1 -NoInstall`, the only Pester entrypoint.
+2. `scripts/Invoke-SecretScan.ps1`.
+3. `scripts/ci.ps1 -NoInstall`.
 
-`scripts/ci.ps1` runs PSScriptAnalyzer and all Pester behavior and architecture
-suites. It fails if analysis reports an issue, if Pester discovers no tests, or if
-Pester returns a status other than `Passed`.
+`scripts/ci.ps1` runs PSScriptAnalyzer and fails if analysis reports an issue.
 
-`scripts/ci-rust.sh` runs the Node architecture tests
-(`tests/architecture/*.test.cjs`), the desktop and Rust checks described under
-[Rust migration gate](#rust-migration-gate), and the whitespace check.
+`scripts/ci-rust.sh` runs the desktop and Rust checks described under
+[Rust migration gate](#rust-migration-gate) and the whitespace check.
 
 If the complete gate cannot run (for example, `pwsh` is unavailable), run the
-checks that can (`make lint`, `make test-bash`, `scripts/ci-rust.sh`), and name
+checks that can (`make lint`, `scripts/ci-rust.sh`), and name
 every skipped check and the resulting gap when reporting. A PowerShell-only run
 of `scripts/ci.ps1 -NoInstall` is not equivalent to the gate.
 
@@ -77,7 +68,7 @@ modules. Where current-user PowerShell module installation is allowed, run:
 NETWORK_LANTERN_INSTALL_MISSING_MODULES=1 ./scripts/ci-local.sh
 ```
 
-That option installs only the pinned PSScriptAnalyzer and Pester versions.
+That option installs only the pinned PSScriptAnalyzer version.
 
 ## PowerShell and focused checks
 
@@ -91,31 +82,17 @@ Omit `-NoInstall` to install missing pinned PowerShell modules for the current
 user. When needed, the script changes the PowerShell Gallery trust policy
 temporarily and restores the previous value afterward.
 
-Run a Pester subset while you iterate:
-
-```powershell
-pwsh -NoProfile -NonInteractive -File .\scripts\ci.ps1 -NoInstall `
-  -Filter 'Throughput'
-```
-
-The filter matches Pester full names, skips PSScriptAnalyzer, and fails when it
-selects no tests. Useful
-filters include `Path`, `Throughput`, `Windows tuning`, and `Workflow`. A focused
-run is not equivalent to the complete gate.
-
 ## Make targets
 
 | Target | Scope |
 | --- | --- |
 | `make lint` | ShellCheck only |
-| `make test-bash` | Bats path tests only |
 | `make test-pwsh` | `scripts/ci.ps1 -NoInstall` |
-| `make test-site` | Dependency-free static planner command and interaction tests |
-| `make test` | Bats, static planner tests, then the PowerShell gate; omits ShellCheck and the secret scan |
+| `make test` | The PowerShell gate; omits ShellCheck and the secret scan |
 | `make ci-local` | Complete cross-shell gate |
 
 The legacy suite has no separate build or package step. The Rust and desktop
-checks below add formatting, type checking, builds, and native UI tests. There is
+checks below add formatting, type checking, linting, and builds. There is
 no configured Markdown linter.
 
 ## Safe command previews
@@ -162,41 +139,19 @@ writes the profile, and `-DeleteProfile` changes the selected store.
 - `powershell-lint-test` runs the secret scan and PowerShell gate on Windows.
 
 The workflow pins third-party actions by commit and caches PSScriptAnalyzer
-1.24.0 and Pester 5.7.1.
+1.24.0.
 
 `.github/workflows/rust.yml` runs the steps of `scripts/ci-rust.sh` on Ubuntu,
-Windows, and both macOS architectures, plus opt-in iperf3 interoperability jobs.
-`.github/workflows/pages.yml` runs the planner tests and publishes `site/` to
-GitHub Pages. Neither workflow's configuration proves that remote CI has passed.
+Windows, and both macOS architectures.
+`.github/workflows/pages.yml` publishes `site/` to GitHub Pages. Neither workflow's configuration proves that remote CI has passed.
 
-## What the tests cover
+## What the checks cover
 
-Automated tests cover plan construction, input and filesystem behavior, preview
-non-mutation, exit codes, Bash timeouts and signal escalation, throughput profile
-locking and cancellation contracts, workflow precedence and child isolation,
-Windows tuning backup and restore defenses, and repository dependency rules.
+The automated gate runs ShellCheck, PSScriptAnalyzer, the secret scan, Rust
+formatting, Clippy, and the Rust unit tests, and the desktop type check and
+production build.
 
-Focused regressions cover:
-
-- resolved workflow validation and child-process failure status;
-- QoS inventory failure without any QoS mutation;
-- bounded native throughput streams and UTF-8 diagnostics;
-- plan cardinality and measurement budgets; and
-- per-file atomic artifact replacement.
-
-The static planner suite checks pure command generation across every workflow,
-checkbox state, and select option, including input validation and budget
-forwarding. A minimal DOM fixture exercises the shipped interaction script's
-keyboard navigation, field errors, reset behavior, and clipboard success, failure,
-and stale-command feedback. A token test keeps `site/tokens.css` and the bundled
-fonts byte-identical to their desktop copies in `desktop/src/`. These Node tests do not render a browser, so layout
-changes also need desktop and mobile browser QA.
-
-GUI regressions cover text validation before the busy state, plan and result
-presentation, zero-valued profile settings, and adapter control and event
-contracts. They run without loading Windows Forms on non-Windows hosts.
-
-## What the tests do not cover
+## What the checks do not cover
 
 - They do not contact the default public path targets.
 - They do not run a live `iperf3` client against an external server.
@@ -214,41 +169,21 @@ Do not present these gaps as verified runtime behavior.
   `scripts/ci.ps1` once where current-user installation is allowed.
 - On Windows, make sure Bash dependencies and `pwsh` are visible from the same Git
   Bash or WSL environment that runs `scripts/ci-local.sh`.
-- If a focused run selects no tests, use a substring from a Pester `Describe`,
-  `Context`, or `It` name.
 - Preserve LF line endings. Only the directly invoked shell scripts are Git mode
-  `100755`; the architecture test fails on any other executable file.
+  `100755`.
 
 ## Rust migration gate
 
 `scripts/ci-rust.sh` is the second half of `scripts/ci-local.sh`. It requires Rust 1.96.0 and the desktop Node dependencies installed
 with `npm ci` under `desktop/`. It runs:
 
-- Node architecture tests, including default-host parity across implementations;
 - Rust formatting and Clippy with warnings denied;
 - workspace unit and integration tests;
 - a CLI release build;
-- desktop TypeScript and frontend tests;
-- rendered Playwright flows and native WebdriverIO flows; and
+- desktop TypeScript checks and the production frontend build;
 - a production Tauri host and helper build.
 
-The TypeScript checks cover the interface, test files, and test configuration.
-Native tests include cancellation during window shutdown, and they verify the
-persisted partial report before confirming process exit. The WebDriver launcher
-passes an allowlist of platform environment variables so debug diagnostics cannot
-log unrelated account credentials, and Linux headless native tests use Xvfb.
-Install the development Chromium engine with `npx playwright install chromium`
-from `desktop/` before the local gate.
-
-The unchanged legacy suites continue to protect the behavior reference until
-migration acceptance.
-
-Runtime regressions verify IPv4/IPv6 target preservation through resolved plans
-and saved profiles, malformed workflow-section validation, and readable run
-listings beside damaged legacy indexes. Browser fixtures defer command responses
-to check that older profile and report requests cannot replace a newer selection,
-including late failures. Profile mutation tests also cover captured write targets
-and deletion confirmation invalidation.
+The desktop type check covers the interface sources.
 
 `.github/workflows/rust.yml` configures Ubuntu 22.04, Windows, macOS Apple
 Silicon, and macOS Intel jobs. The macOS deployment target is 13.0; builds use
@@ -256,11 +191,4 @@ supported newer CI hosts. Local macOS checks do not verify Windows native
 providers, Windows recovery, Linux authorization, or remote CI status.
 
 See [the Rust guide](RUST.md) for pure preview commands.
-Interoperability tests are limited to bounded loopback
-traffic with development reference servers. Production engines do not invoke
-iperf3, MTR, PowerShell, Bash, or command-line probes.
-
-The Rust CI workflow also configures Linux loopback interoperability jobs for
-iperf3 3.7 and 3.21, built from checksum-verified official source archives. These
-are development references; the application does not invoke iperf3. Configuring
-the jobs does not establish that remote CI passed.
+Production engines do not invoke iperf3, MTR, PowerShell, Bash, or command-line probes.

@@ -74,11 +74,10 @@ method.
 
 ## Windows and shell checkouts
 
-`.gitattributes` normalizes text files to LF. Do not convert shell or Bats files
+`.gitattributes` normalizes text files to LF. Do not convert shell files
 to CRLF. Only shell scripts that are invoked directly are executable in Git; every
 other tracked file is `100644`. When you add or rename such a script, record Git
-mode `100755` and add it to the executable allowlist in
-`tests/architecture/RepositoryArchitecture.Tests.ps1`:
+mode `100755`:
 
 ```bash
 git add --chmod=+x path/to/entrypoint.sh

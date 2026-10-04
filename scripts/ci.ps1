@@ -1,9 +1,6 @@
 [CmdletBinding()]
 param(
-  [switch]$NoInstall,
-  # Substring of a Pester Describe/Context/It full name. Runs that Pester subset only
-  # (skips static analysis) and fails when it selects no tests.
-  [string]$Filter
+  [switch]$NoInstall
 )
 
 Set-StrictMode -Version Latest
@@ -15,10 +12,9 @@ Write-Information "PowerShell version: $($PSVersionTable.PSVersion)" -Informatio
 Write-Information "PSModulePath: $env:PSModulePath" -InformationAction Continue
 
 # Keep module version pins in sync with scripts/Test-Prerequisites.ps1 and the
-# cache-key comment in .github/workflows/ci.yml. Update all three when bumping either version.
+# cache-key comment in .github/workflows/ci.yml. Update all three when bumping the version.
 $requiredModules = @{
   PSScriptAnalyzer = '1.24.0'
-  Pester           = '5.7.1'
 }
 
 function Test-ExactModuleInstalled {
@@ -118,44 +114,14 @@ $pathsToAnalyze = @(
   (Join-Path $repoRoot 'apps')
   (Join-Path $repoRoot 'src')
   (Join-Path $repoRoot 'scripts')
-  (Join-Path $repoRoot 'tests')
   (Join-Path $repoRoot 'Invoke-NetworkLantern.ps1')
 )
 
 $settingsPath = Join-Path $repoRoot 'PSScriptAnalyzerSettings.psd1'
-if ($Filter) {
-  Write-Warning 'ci.ps1 -Filter runs a filtered Pester subset only. Run scripts/ci.ps1 without -Filter or ./scripts/ci-local.sh for the full verification gate.'
-} else {
-  $scriptAnalyzerResults = foreach ($path in $pathsToAnalyze) {
-    Invoke-ScriptAnalyzer -Path $path -Recurse -Settings $settingsPath
-  }
-  if ($scriptAnalyzerResults) {
-    $scriptAnalyzerResults | Sort-Object ScriptName, Line | Format-Table -AutoSize | Out-String | Write-Output
-    throw "PSScriptAnalyzer found $(@($scriptAnalyzerResults).Count) issue(s)."
-  }
+$scriptAnalyzerResults = foreach ($path in $pathsToAnalyze) {
+  Invoke-ScriptAnalyzer -Path $path -Recurse -Settings $settingsPath
 }
-
-$pesterConfiguration = [PesterConfiguration]::Default
-$pesterConfiguration.Run.Path = Join-Path $repoRoot 'tests'
-$pesterConfiguration.Run.Exit = $false
-$pesterConfiguration.Run.PassThru = $true
-$pesterConfiguration.Output.Verbosity = 'Detailed'
-$pesterConfiguration.Should.ErrorAction = 'Stop'
-if ($Filter) {
-  $pesterConfiguration.Filter.FullName = "*$Filter*"
-}
-
-$pesterResult = Invoke-Pester -Configuration $pesterConfiguration
-if (-not $pesterResult) {
-  throw 'Pester did not return a result object.'
-}
-if (($pesterResult.TotalCount - $pesterResult.NotRunCount) -eq 0) {
-  if ($Filter) {
-    throw "No tests matched filter '$Filter'."
-  }
-  throw 'Pester did not discover any tests.'
-}
-$pesterFailureCount = $pesterResult.FailedCount + $pesterResult.FailedBlocksCount + $pesterResult.FailedContainersCount
-if ($pesterResult.Result -ne 'Passed' -or $pesterFailureCount -gt 0) {
-  throw "Pester result was '$($pesterResult.Result)': $($pesterResult.FailedCount) failed test(s), $($pesterResult.FailedBlocksCount) failed block(s), $($pesterResult.FailedContainersCount) failed container(s)."
+if ($scriptAnalyzerResults) {
+  $scriptAnalyzerResults | Sort-Object ScriptName, Line | Format-Table -AutoSize | Out-String | Write-Output
+  throw "PSScriptAnalyzer found $(@($scriptAnalyzerResults).Count) issue(s)."
 }
