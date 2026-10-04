@@ -639,10 +639,8 @@ fn create_protected_directory(path: &Path, sddl: &str) -> Result<bool> {
         .collect::<Vec<_>>();
     with_security_descriptor(sddl, |attributes| {
         let created = unsafe { CreateDirectoryW(wide_path.as_ptr(), attributes) } != 0;
-        if !created {
-            if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
-                return Err(last("create protected helper directory"));
-            }
+        if !created && unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+            return Err(last("create protected helper directory"));
         }
         validate_regular_directory(path)?;
         Ok(created)
