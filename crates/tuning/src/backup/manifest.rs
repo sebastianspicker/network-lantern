@@ -12,6 +12,7 @@ use std::{
 pub enum ArtifactKind {
     SystemProfile,
     AfdParameters,
+    TcpipQos,
     QosPolicies,
     NicAdvanced,
     NicRsc,
@@ -19,9 +20,10 @@ pub enum ArtifactKind {
 }
 
 impl ArtifactKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::SystemProfile,
         Self::AfdParameters,
+        Self::TcpipQos,
         Self::QosPolicies,
         Self::NicAdvanced,
         Self::NicRsc,
@@ -32,6 +34,7 @@ impl ArtifactKind {
         match self {
             Self::SystemProfile => "SystemProfile.reg",
             Self::AfdParameters => "AFD_Parameters.reg",
+            Self::TcpipQos => "Tcpip_QoS.reg",
             Self::QosPolicies => "qos_ours.xml",
             Self::NicAdvanced => "nic_advanced_backup.csv",
             Self::NicRsc => "rsc_backup.csv",
@@ -43,7 +46,7 @@ impl ArtifactKind {
         match self {
             Self::QosPolicies => super::MAX_QOS_BYTES,
             Self::PowerPlan => 64,
-            Self::SystemProfile | Self::AfdParameters => super::MAX_REGISTRY_BYTES,
+            Self::SystemProfile | Self::AfdParameters | Self::TcpipQos => super::MAX_REGISTRY_BYTES,
             Self::NicAdvanced | Self::NicRsc => super::MAX_CSV_BYTES,
         }
     }
@@ -56,6 +59,13 @@ pub struct BackupManifestComponents {
     pub system_profile: bool,
     #[serde(rename = "AfdParameters")]
     pub afd_parameters: bool,
+    /// Added in schema 4; absent from older manifests.
+    #[serde(
+        rename = "TcpipQos",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub tcpip_qos: bool,
     #[serde(rename = "QosPolicies")]
     pub qos_policies: bool,
     #[serde(rename = "NicAdvanced")]
@@ -71,6 +81,7 @@ impl BackupManifestComponents {
         match kind {
             ArtifactKind::SystemProfile => self.system_profile,
             ArtifactKind::AfdParameters => self.afd_parameters,
+            ArtifactKind::TcpipQos => self.tcpip_qos,
             ArtifactKind::QosPolicies => self.qos_policies,
             ArtifactKind::NicAdvanced => self.nic_advanced,
             ArtifactKind::NicRsc => self.nic_rsc,
@@ -163,9 +174,9 @@ pub fn parse_manifest_bounded(bytes: &[u8]) -> Result<BackupManifest> {
     enforce_json_depth(bytes, 32)?;
     let manifest: BackupManifest = serde_json::from_slice(bytes)
         .map_err(|error| TuningError::BackupInvalid(format!("invalid manifest JSON: {error}")))?;
-    if !(1..=3).contains(&manifest.schema_version) {
+    if !(1..=4).contains(&manifest.schema_version) {
         return Err(TuningError::BackupInvalid(
-            "SchemaVersion must be 1, 2, or 3".into(),
+            "SchemaVersion must be 1, 2, 3, or 4".into(),
         ));
     }
     if manifest.tool_name.trim().is_empty() {
@@ -244,6 +255,31 @@ mod tests {
     use super::*;
 
     const COMPONENTS: &str = r#""Components":{"SystemProfile":false,"AfdParameters":false,"QosPolicies":false,"NicAdvanced":false,"NicRsc":false,"PowerPlan":true}"#;
+
+    #[test]
+    fn accepts_schema_four_manifest_with_tcpip_qos() {
+        let json = format!(
+            r#"{{"SchemaVersion":4,"ToolName":"network-lantern","Components":{{"SystemProfile":false,"AfdParameters":false,"TcpipQos":true,"QosPolicies":false,"NicAdvanced":false,"NicRsc":false,"PowerPlan":true}},"ArtifactDigests":{{"Tcpip_QoS.reg":"{}","powerplan.txt":"{}"}}}}"#,
+            "A".repeat(64),
+            "B".repeat(64)
+        );
+        let manifest = parse_manifest_bounded(json.as_bytes()).expect("schema 4 manifest parses");
+        assert!(manifest.components.tcpip_qos);
+        assert_eq!(
+            manifest.expected_artifacts(),
+            vec![ArtifactKind::TcpipQos, ArtifactKind::PowerPlan]
+        );
+        assert_eq!(ArtifactKind::TcpipQos.file_name(), "Tcpip_QoS.reg");
+    }
+
+    #[test]
+    fn older_manifest_without_tcpip_qos_defaults_to_false() {
+        let json = format!(
+            r#"{{"SchemaVersion":3,"ToolName":"network-lantern",{COMPONENTS},"ArtifactDigests":{{}}}}"#
+        );
+        let manifest = parse_manifest_bounded(json.as_bytes()).expect("schema 3 manifest parses");
+        assert!(!manifest.components.tcpip_qos);
+    }
 
     #[test]
     fn rejects_duplicate_digest_case_variants() {

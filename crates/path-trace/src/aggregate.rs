@@ -81,9 +81,21 @@ impl HopAccumulator {
         if self.totals.sent == 0 {
             return None;
         }
+        // Dominant responder; BTreeMap order plus strict `>` keeps the lowest address on ties.
+        let address = self
+            .responders
+            .iter()
+            .fold(
+                None::<(IpAddr, u32)>,
+                |best, (address, values)| match best {
+                    Some((_, count)) if values.sent <= count => best,
+                    _ => Some((*address, values.sent)),
+                },
+            )
+            .map(|(address, _)| address);
         Some(TraceHop {
             ttl,
-            address: self.responders.keys().next().copied(),
+            address,
             hostname: None,
             asn: None,
             mpls: self.stacks.iter().flatten().cloned().collect(),
@@ -139,5 +151,34 @@ mod tests {
         assert_eq!(actual.last_ms, expected.last_ms);
         assert!((actual.average_ms.unwrap() - expected.average_ms.unwrap()).abs() < 1e-10);
         assert!((actual.stddev_ms.unwrap() - expected.stddev_ms.unwrap()).abs() < 1e-10);
+    }
+    #[test]
+    fn hop_address_is_dominant_responder_with_lowest_address_on_ties() {
+        let sample = |sequence, last_octet| Sample {
+            sequence,
+            hop: Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, last_octet))),
+            elapsed_ms: Some(1.0),
+            status: SampleStatus::TimeExceeded,
+            next_hop_mtu: None,
+            mpls: Vec::new(),
+        };
+        let mut accumulator = HopAccumulator::default();
+        for (sequence, octet) in [(0, 1), (1, 2), (2, 2)] {
+            accumulator.record(sample(sequence, octet));
+        }
+        let hop = accumulator.finish(1).unwrap();
+        assert_eq!(
+            hop.address,
+            Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 2)))
+        );
+        let mut accumulator = HopAccumulator::default();
+        for (sequence, octet) in [(0, 2), (1, 1)] {
+            accumulator.record(sample(sequence, octet));
+        }
+        let hop = accumulator.finish(1).unwrap();
+        assert_eq!(
+            hop.address,
+            Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)))
+        );
     }
 }

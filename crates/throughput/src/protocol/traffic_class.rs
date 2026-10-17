@@ -25,6 +25,20 @@ fn dscp_from_tos(tos: u8) -> std::io::Result<u32> {
     Ok(u32::from(tos >> 2))
 }
 
+/// Explains access-denied qWAVE failures; other errors pass through unchanged.
+#[cfg(any(windows, test))]
+fn explain_access_denied(error: std::io::Error) -> std::io::Error {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        return std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "setting a nonzero DSCP class needs an elevated process or the registered helper ({error})"
+            ),
+        );
+    }
+    error
+}
+
 #[cfg(windows)]
 pub(super) fn apply<S: AsSocket>(socket: &S, tos: u8) -> std::io::Result<TrafficClassFlow> {
     use windows_sys::Win32::{
@@ -60,7 +74,9 @@ pub(super) fn apply<S: AsSocket>(socket: &S, tos: u8) -> std::io::Result<Traffic
         )
     } == 0
     {
-        let error = std::io::Error::from_raw_os_error(unsafe { GetLastError() as i32 });
+        let error = explain_access_denied(std::io::Error::from_raw_os_error(unsafe {
+            GetLastError() as i32
+        }));
         unsafe { QOSCloseHandle(qos_handle) };
         return Err(error);
     }
@@ -76,7 +92,9 @@ pub(super) fn apply<S: AsSocket>(socket: &S, tos: u8) -> std::io::Result<Traffic
         )
     } == 0
     {
-        let error = std::io::Error::from_raw_os_error(unsafe { GetLastError() as i32 });
+        let error = explain_access_denied(std::io::Error::from_raw_os_error(unsafe {
+            GetLastError() as i32
+        }));
         unsafe {
             QOSRemoveSocketFromFlow(qos_handle, 0, flow_id, 0);
             QOSCloseHandle(qos_handle);
@@ -105,7 +123,7 @@ impl Drop for TrafficClassFlow {
 
 #[cfg(test)]
 mod tests {
-    use super::dscp_from_tos;
+    use super::{dscp_from_tos, explain_access_denied};
 
     #[test]
     fn converts_dscp_tos_and_rejects_ecn_or_best_effort() {
@@ -113,5 +131,14 @@ mod tests {
         assert_eq!(dscp_from_tos(40).unwrap(), 10);
         assert!(dscp_from_tos(0).is_err());
         assert!(dscp_from_tos(185).is_err());
+    }
+
+    #[test]
+    fn access_denied_mentions_elevation_or_helper() {
+        let denied = explain_access_denied(std::io::ErrorKind::PermissionDenied.into());
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(denied.to_string().contains("elevated process"));
+        let other = explain_access_denied(std::io::ErrorKind::NotFound.into());
+        assert_eq!(other.kind(), std::io::ErrorKind::NotFound);
     }
 }

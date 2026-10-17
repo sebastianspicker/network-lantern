@@ -26,9 +26,22 @@ function Get-NetworkTuningManagedQosPolicy {
   }
 }
 
+function Test-NetworkTuningQosPortPolicyNameMatch {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param(
+    [Parameter(Mandatory)][AllowEmptyString()][string]$PolicyName,
+    [Parameter(Mandatory)][string]$BaseName
+  )
+
+  # A policy belongs to BaseName when it is exactly BaseName or BaseName_<port> (range members).
+  # An unanchored prefix would also match ..._PORT_5000 against ..._PORT_50001.
+  return ($PolicyName -match ('^' + [regex]::Escape($BaseName) + '(?:_\d+)?$'))
+}
+
 function New-NetworkTuningDscpPolicyByPort {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([void])]
+  [OutputType([bool], [string])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,
@@ -69,7 +82,7 @@ function New-NetworkTuningDscpPolicyByPort {
   }
 
   # Clean up existing policies that match the prefix
-  $existingPolicies = Get-NetworkTuningManagedQosPolicy -ErrorOnFailure | Where-Object { $_.Name -match ("^" + [regex]::Escape($Name)) }
+  $existingPolicies = Get-NetworkTuningManagedQosPolicy -ErrorOnFailure | Where-Object { Test-NetworkTuningQosPortPolicyNameMatch -PolicyName $_.Name -BaseName $Name }
   foreach ($existing in $existingPolicies) {
     if ($PSCmdlet.ShouldProcess($existing.Name, 'Remove existing NetQosPolicy')) {
       try { Remove-NetQosPolicy -Name $existing.Name -Confirm:$false -ErrorAction Stop | Out-Null }
@@ -77,26 +90,32 @@ function New-NetworkTuningDscpPolicyByPort {
     }
   }
 
+  $createdCount = 0
+  $declinedCount = 0
   for ($port = [int]$PortStart; $port -le $effectivePortEnd; $port++) {
     $policyName = if ($PortStart -eq $effectivePortEnd) { $Name } else { "{0}_{1}" -f $Name, $port }
     if (-not $PSCmdlet.ShouldProcess($policyName, 'Create NetQosPolicy (DSCP by UDP port)')) {
+      $declinedCount++
       continue
     }
 
     try {
       New-NetQosPolicy -Name $policyName -IPPortMatchCondition ([uint16]$port) -IPProtocolMatchCondition UDP -DSCPAction $Dscp -NetworkProfile All -ErrorAction Stop | Out-Null
+      $createdCount++
     } catch {
       Write-Warning -Message ("Could not create a network priority rule for port {0}. Windows may have hit its policy limit. ({1})" -f $port, $_.Exception.Message)
       return $false # Stop if we hit a system limit
     }
   }
 
+  # 'Skipped' means every policy was declined and nothing was applied.
+  if ($createdCount -eq 0 -and $declinedCount -gt 0) { return 'Skipped' }
   return $true
 }
 
 function New-NetworkTuningDscpPolicyByApp {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([bool])]
+  [OutputType([bool], [string])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,
@@ -130,7 +149,7 @@ function New-NetworkTuningDscpPolicyByApp {
   }
 
   if (-not $PSCmdlet.ShouldProcess($Name, 'Create NetQosPolicy (DSCP by app path)')) {
-    return $true
+    return 'Skipped'
   }
 
   try {

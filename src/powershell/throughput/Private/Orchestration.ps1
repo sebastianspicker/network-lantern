@@ -286,7 +286,8 @@ function Write-FinalOutputs {
     [string]$Iperf3Version,
     [nullable[double]]$ThresholdMinThroughputMbps,
     [nullable[double]]$ThresholdMaxLossPct,
-    [nullable[double]]$ThresholdMaxJitterMs
+    [nullable[double]]$ThresholdMaxJitterMs,
+    [string]$Interruption
   )
   try {
     $csvText = (($CsvRowsList | ConvertTo-Csv -NoTypeInformation) -join [Environment]::NewLine) + [Environment]::NewLine
@@ -313,7 +314,7 @@ function Write-FinalOutputs {
       ($_.PSObject.Properties.Name -contains 'MetricError' -and $_.MetricError)
     }).Count
   $parseErrorCount = @($AllResultsList | Where-Object { $_.JsonParseError }).Count
-  $runSummary = Build-RunSummary -Results $AllResultsList.ToArray() -TestCount $AllResultsList.Count -ParseErrorCount $parseErrorCount -Target $FinalResultObject.Target -Port $FinalResultObject.Port -Stack $FinalResultObject.Stack -Timestamp $Timestamp -OutDir $OutDir -StartedUtc $StartedUtc -CompletedUtc $CompletedUtc -ElapsedSeconds $ElapsedSeconds -Iperf3Version $Iperf3Version -ThresholdMinThroughputMbps $ThresholdMinThroughputMbps -ThresholdMaxLossPct $ThresholdMaxLossPct -ThresholdMaxJitterMs $ThresholdMaxJitterMs
+  $runSummary = Build-RunSummary -Results $AllResultsList.ToArray() -TestCount $AllResultsList.Count -ParseErrorCount $parseErrorCount -Target $FinalResultObject.Target -Port $FinalResultObject.Port -Stack $FinalResultObject.Stack -Timestamp $Timestamp -OutDir $OutDir -StartedUtc $StartedUtc -CompletedUtc $CompletedUtc -ElapsedSeconds $ElapsedSeconds -Iperf3Version $Iperf3Version -ThresholdMinThroughputMbps $ThresholdMinThroughputMbps -ThresholdMaxLossPct $ThresholdMaxLossPct -ThresholdMaxJitterMs $ThresholdMaxJitterMs -Interruption $Interruption
   $runSummary.ArtifactStatus.Csv = $csvStatus
   $runSummary.ArtifactStatus.Json = $jsonStatus
   # Create the human-readable report first, but persist the summary JSON only

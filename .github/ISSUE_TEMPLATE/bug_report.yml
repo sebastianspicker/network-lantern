@@ -42,8 +42,10 @@ body:
       description: Provide only sanitized, non-sensitive environment details.
       value: |
         - OS:
-        - PowerShell version (pwsh -v):
-        - Script/module version:
+        - Network Lantern version (`cat VERSION`, `network-lantern --version`):
+        - Tool used (Rust CLI, desktop, PowerShell or Bash tool) and its component version:
+        - PowerShell version (pwsh -v), if relevant:
+        - `network-lantern doctor --json` output, if using the Rust CLI:
         - NIC model/driver (if relevant):
     validations:
       required: true

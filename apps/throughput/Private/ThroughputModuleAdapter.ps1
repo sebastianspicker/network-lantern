@@ -134,7 +134,7 @@ function Read-ThroughputConfigurationFile {
   )
 
   if (Test-ThroughputPathUnderBase -BasePath $BasePath -CandidatePath $Path) {
-    Assert-ThroughputRelativePathHasNoReparsePoint -BasePath $BasePath -CandidatePath $Path -PathDescription 'Configuration path'
+    $null = Assert-ThroughputRelativePathHasNoReparsePoint -BasePath $BasePath -CandidatePath $Path -PathDescription 'Configuration path'
   }
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     Write-ThroughputApplicationInputError -Message "Configuration path is not a file: $Path" -TargetObject $Path
@@ -167,6 +167,23 @@ function Read-ThroughputConfigurationFile {
   finally {
     if ($stream) { $stream.Dispose() }
   }
+}
+
+function Invoke-ThroughputParameterNormalization {
+  [CmdletBinding()]
+  [OutputType([pscustomobject])]
+  param(
+    [Parameter(Mandatory)][hashtable]$Parameters,
+    [Parameter(Mandatory)][string[]]$AllowedKeys,
+    [Parameter(Mandatory)][bool]$Strict
+  )
+  # The normalizer is private to the module; run it in module scope so the CLI shares its validation rules.
+  $module = Get-Module -Name NetworkLantern.Throughput
+  if (-not $module) { throw 'The NetworkLantern.Throughput module is not loaded.' }
+  return (& $module {
+      param($InputParameters, $Allowed, $StrictMode)
+      ConvertTo-Iperf3NormalizedParameterSet -InputParameters $InputParameters -AllowedKeys $Allowed -StrictConfiguration:$StrictMode
+    } $Parameters $AllowedKeys $Strict)
 }
 
 function Resolve-ThroughputExitCode {

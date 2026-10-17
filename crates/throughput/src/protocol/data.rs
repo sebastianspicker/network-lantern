@@ -1,5 +1,23 @@
 use super::*;
 const REORDER_WINDOW: usize = 65_536;
+/// Minimum pacer backlog tolerated before the schedule is reset to now.
+const PACER_MAX_BACKLOG: Duration = Duration::from_millis(10);
+
+/// Incompressible payload so compressing links cannot overstate throughput.
+fn random_payload(buffer: &mut [u8]) {
+    rand::rng().fill(buffer);
+}
+
+/// Advances the pacing schedule by one interval, dropping any backlog larger
+/// than one interval or 10 ms, whichever is longer, instead of sending a catch-up burst.
+fn next_deadline(deadline: Instant, interval: Duration, now: Instant) -> Instant {
+    let next = deadline + interval;
+    if now.saturating_duration_since(next) > interval.max(PACER_MAX_BACKLOG) {
+        now
+    } else {
+        next
+    }
+}
 
 pub(super) async fn tcp_send(
     id: usize,
@@ -8,7 +26,8 @@ pub(super) async fn tcp_send(
     end: Instant,
     cancellation: CancellationToken,
 ) -> Result<StreamOutcome> {
-    let buffer = vec![0u8; TCP_BLOCK_SIZE];
+    let mut buffer = vec![0u8; TCP_BLOCK_SIZE];
+    random_payload(&mut buffer);
     let mut bytes = 0u64;
     loop {
         tokio::select! {biased;
@@ -68,12 +87,14 @@ pub(super) async fn udp_send(
     id: usize,
     socket: &UdpSocket,
     rate_bps: u64,
+    block_size: usize,
     omit_end: Instant,
     end: Instant,
     cancellation: CancellationToken,
 ) -> Result<StreamOutcome> {
-    let mut packet = vec![0u8; UDP_BLOCK_SIZE];
-    let interval = Duration::from_secs_f64(UDP_BLOCK_SIZE as f64 * 8.0 / rate_bps as f64);
+    let mut packet = vec![0u8; block_size];
+    random_payload(&mut packet);
+    let interval = Duration::from_secs_f64(block_size as f64 * 8.0 / rate_bps as f64);
     if interval.is_zero() {
         return Err(ThroughputError::Validation(
             "UDP pacing interval rounded to zero".into(),
@@ -115,7 +136,7 @@ pub(super) async fn udp_send(
             bytes = bytes.saturating_add(sent as u64);
             packets += 1;
         }
-        deadline += interval;
+        deadline = next_deadline(deadline, interval, Instant::now());
     }
     let mut result = outcome(id, true, bytes, omit_end);
     result.packets = packets;
@@ -201,9 +222,8 @@ pub(super) async fn udp_receive(
             result=socket.recv(&mut buffer)=>result.map_err(|e|ThroughputError::io("UDP receive",e))?
         };
         if read < 16 {
-            return Err(ThroughputError::MalformedResult(
-                "Truncated UDP datagram".into(),
-            ));
+            // Stray or truncated datagram: skip it rather than aborting the test.
+            continue;
         }
         let micros = u32::from_be_bytes(buffer[4..8].try_into().unwrap());
         if micros >= 1_000_000 {
@@ -269,6 +289,51 @@ mod tests {
         assert_eq!(measured.jitter, 0.5 / 16.0);
         assert_eq!(measured.bytes, 16);
         assert_eq!(measured.expected(), 1);
+    }
+    #[test]
+    fn pacer_drops_backlog_after_a_stall() {
+        let interval = Duration::from_millis(1);
+        let start = Instant::now();
+        assert_eq!(
+            next_deadline(start, interval, start + Duration::from_millis(1)),
+            start + interval
+        );
+        let now = start + Duration::from_secs(1);
+        assert_eq!(next_deadline(start, interval, now), now);
+    }
+    #[test]
+    fn payload_is_not_zero_filled() {
+        let mut buffer = vec![0u8; 1024];
+        random_payload(&mut buffer);
+        assert!(buffer.iter().any(|byte| *byte != 0));
+    }
+    #[tokio::test]
+    async fn short_udp_datagrams_are_ignored() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sender
+            .connect(receiver.local_addr().unwrap())
+            .await
+            .unwrap();
+        receiver
+            .connect(sender.local_addr().unwrap())
+            .await
+            .unwrap();
+        sender.send(&[1, 2, 3]).await.unwrap();
+        let mut packet = [0u8; 64];
+        packet[8..16].copy_from_slice(&1u64.to_be_bytes());
+        sender.send(&packet).await.unwrap();
+        let now = Instant::now();
+        let outcome = udp_receive(
+            1,
+            &receiver,
+            now,
+            now + Duration::from_millis(300),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.wire_packets, 1);
     }
     #[tokio::test]
     async fn premature_tcp_eof_is_a_failure() {

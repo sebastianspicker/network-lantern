@@ -28,7 +28,11 @@ Make targets, CI coverage, and known gaps.
 
 1. Branch from current `main`.
 2. Make one related set of changes.
-3. Add or update tests for observable behavior.
+3. Add or update tests for observable behavior. Inline Rust `#[cfg(test)]`
+   modules live in this repository; the behavioral suites (Pester, Bats, Vitest,
+   Playwright, WebdriverIO, Rust integration and architecture tests) are kept in
+   the maintainer's private test repository, so describe the behavior to test in
+   the pull request.
 4. Update the owning operator or maintainer documentation.
 5. Run focused checks while you iterate.
 6. Run `./scripts/ci-local.sh` and `git diff --check` before opening a pull

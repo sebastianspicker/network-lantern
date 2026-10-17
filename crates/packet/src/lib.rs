@@ -538,8 +538,8 @@ pub fn parse_mpls_extensions(bytes: &[u8]) -> Result<Vec<MplsLabel>, PacketError
     }
     let mut labels = Vec::new();
     let mut offset = 4;
-    while offset < bytes.len() {
-        need(&bytes[offset..], 4)?;
+    // A remainder shorter than an object header is trailing pad, not an object.
+    while bytes.len() - offset >= 4 {
         let length = usize::from(be_u16(&bytes[offset..offset + 2]));
         if length < 4 || offset + length > bytes.len() {
             return Err(PacketError::Malformed(
@@ -549,19 +549,14 @@ pub fn parse_mpls_extensions(bytes: &[u8]) -> Result<Vec<MplsLabel>, PacketError
         let class_num = bytes[offset + 2];
         let c_type = bytes[offset + 3];
         if class_num == 1 && c_type == 1 {
-            let payload = &bytes[offset + 4..offset + length];
-            if !payload.len().is_multiple_of(4) {
-                return Err(PacketError::Malformed("misaligned MPLS label stack"));
-            }
-            let object_labels = payload.len() / 4;
-            if labels.len().saturating_add(object_labels) > MAX_MPLS_LABELS_PER_RESPONSE {
-                return Err(PacketError::Malformed(
-                    "MPLS label stack exceeds supported limit",
-                ));
-            }
-            labels.reserve(object_labels);
-            for word in payload.chunks_exact(4) {
-                let value = be_u32(word);
+            // Label entries are decoded one at a time: a misaligned tail is
+            // ignored and the stack is truncated at the retention budget.
+            let (words, _) = bytes[offset + 4..offset + length].as_chunks::<4>();
+            for word in words {
+                if labels.len() == MAX_MPLS_LABELS_PER_RESPONSE {
+                    return Ok(labels);
+                }
+                let value = u32::from_be_bytes(*word);
                 labels.push(MplsLabel {
                     label: value >> 12,
                     traffic_class: ((value >> 9) & 0x7) as u8,
@@ -760,19 +755,50 @@ mod tests {
 
         let oversized = mpls_extension(&[(1, 1, MAX_MPLS_LABELS_PER_RESPONSE + 1)]);
         assert_eq!(
-            parse_mpls_extensions(&oversized),
-            Err(PacketError::Malformed(
-                "MPLS label stack exceeds supported limit"
-            ))
+            parse_mpls_extensions(&oversized).unwrap().len(),
+            MAX_MPLS_LABELS_PER_RESPONSE
         );
 
         let cumulative = mpls_extension(&[(1, 1, 40), (1, 1, 25)]);
         assert_eq!(
-            parse_mpls_extensions(&cumulative),
-            Err(PacketError::Malformed(
-                "MPLS label stack exceeds supported limit"
-            ))
+            parse_mpls_extensions(&cumulative).unwrap().len(),
+            MAX_MPLS_LABELS_PER_RESPONSE
         );
+    }
+
+    #[test]
+    fn keeps_first_64_of_65_mpls_labels() {
+        let count = MAX_MPLS_LABELS_PER_RESPONSE + 1;
+        let mut extension = vec![0x20, 0, 0, 0];
+        extension.extend_from_slice(&((4 + count * 4) as u16).to_be_bytes());
+        extension.extend_from_slice(&[1, 1]);
+        for label in 1..=count as u32 {
+            extension.extend_from_slice(&((label << 12) | 64).to_be_bytes());
+        }
+        let labels = parse_mpls_extensions(&extension).unwrap();
+        assert_eq!(labels.len(), MAX_MPLS_LABELS_PER_RESPONSE);
+        assert_eq!(labels[0].label, 1);
+        assert_eq!(labels[63].label, 64);
+    }
+
+    #[test]
+    fn keeps_mpls_labels_before_trailing_pad_bytes() {
+        let mut extension = vec![0x20, 0, 0, 0, 0, 12, 1, 1, 0, 0, 0x10, 64, 0, 0, 0x21, 63];
+        let checksum = internet_checksum(&extension);
+        extension[2..4].copy_from_slice(&checksum.to_be_bytes());
+        for pad in 1..4 {
+            let mut padded = extension.clone();
+            padded.resize(extension.len() + pad, 0);
+            let labels = parse_mpls_extensions(&padded).unwrap();
+            assert_eq!(labels.len(), 2, "pad of {pad} bytes");
+            assert_eq!(labels[1].label, 2);
+        }
+
+        // A label object whose length leaves a partial entry keeps whole entries.
+        let misaligned = [0x20, 0, 0, 0, 0, 10, 1, 1, 0, 0, 0x11, 64, 0, 0];
+        let labels = parse_mpls_extensions(&misaligned).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].label, 1);
     }
 
     #[test]

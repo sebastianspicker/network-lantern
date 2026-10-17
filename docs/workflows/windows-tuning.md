@@ -87,7 +87,13 @@ pwsh -NoProfile -File .\apps\windows-tuning\Invoke-NetworkPathTuning.ps1 `
 
 Apply creates the backup before it changes anything. It refuses to continue if
 the backup status, manifest, expected artifacts, digests, or path-trust checks
-fail.
+fail. Adapters without advanced properties or RSC rows (VMs, Wi-Fi) produce an
+empty, valid backup for those components; only a read error fails the backup. A
+declined confirmation is reported as `Skipped`, not `OK`. Apply and Restore ask
+for exactly one confirmation (`ShouldProcess`, high impact) before any change;
+internal changes do not prompt per item. `-WhatIf` makes no change. A
+non-interactive session cannot answer the prompt, so it must pass `-Confirm:$false`
+explicitly to proceed; the workflow orchestrator does not pass it.
 
 Backup folders classified as sensitive system paths are rejected.
 `-AllowUnsafeBackupFolder` bypasses that location check only. It does not bypass
@@ -133,6 +139,14 @@ registry, QoS, NIC, RSC, or power-plan content outside the module's managed
 schemas and scope. Approved artifacts are copied to protected staging and checked
 again before each restore component.
 
+Restore writes back only the values Apply changes: the `Do not use NLA` value
+under the Windows TCP/IP QoS key (deleted again when it was absent at backup
+time), managed QoS policies, NIC advanced properties by their backed-up registry
+values, RSC state, and the power plan. The SystemProfile and AFD registry
+exports are kept for reference but are never imported. A backup written before
+the QoS-key value was recorded (manifest schema below 4) skips that value with a
+warning.
+
 If managed-QoS policy inventory fails, the QoS component returns `Warn` without
 creating or removing policies. The public restore result is unsuccessful and the
 CLI exits 1; read its warnings before you attempt recovery again.
@@ -148,7 +162,7 @@ path is documented in the
 [migration guide](../migration/from-network-diagnostics-suite.md).
 
 The elevated apply and restore cycle has not been completed on a disposable
-Windows VM for this revision. Automated tests cover dry runs, backup refusal,
+Windows VM for this revision. The private test suite covers dry runs, backup refusal,
 manifest and digest validation, path trust, staging replacement, and scoped
 restore behavior.
 

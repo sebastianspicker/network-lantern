@@ -79,6 +79,7 @@ where
     F: Fn(I, &CancellationToken) -> Result<T, ProbeError> + Sync,
 {
     assert!(max_outstanding > 0);
+    let max_outstanding = clamp_outstanding(max_outstanding, descriptor_limit());
     let worker_cancellation = cancellation.child_token();
     let mut completed = Vec::new();
     let mut failure = None;
@@ -119,12 +120,25 @@ where
                 thread::sleep(POLL_INTERVAL);
             }
 
-            let worker_cancellation = worker_cancellation.clone();
+            let token = worker_cancellation.clone();
             let probe = &probe;
-            workers.push((
-                owner,
-                scope.spawn(move || probe(input, &worker_cancellation)),
-            ));
+            match thread::Builder::new()
+                .name("lantern-probe".into())
+                .spawn_scoped(scope, move || probe(input, &token))
+            {
+                Ok(worker) => workers.push((owner, worker)),
+                Err(error) => {
+                    record_failure(
+                        &mut failure,
+                        &worker_cancellation,
+                        ProbeError::Io {
+                            operation: "spawn paced probe worker",
+                            message: error.to_string(),
+                        },
+                    );
+                    break;
+                }
+            }
             // Capacity waits and scheduler stalls never shorten the next interval.
             next_send = Instant::now() + interval;
         }
@@ -149,6 +163,50 @@ where
     });
 
     PacedResult { completed, failure }
+}
+
+/// Descriptors reserved for the process outside concurrent probe workers.
+const RESERVED_DESCRIPTORS: u64 = 64;
+/// Upper bound for each outstanding probe: a probe socket, a listener and one
+/// transient source-selection socket.
+const DESCRIPTORS_PER_PROBE: u64 = 3;
+
+/// Keep `max_outstanding * 3 + 64` within the soft descriptor limit.
+fn clamp_outstanding(max_outstanding: usize, limit: Option<u64>) -> usize {
+    let Some(limit) = limit else {
+        return max_outstanding;
+    };
+    let budget = limit.saturating_sub(RESERVED_DESCRIPTORS) / DESCRIPTORS_PER_PROBE;
+    max_outstanding.min(usize::try_from(budget).unwrap_or(usize::MAX).max(1))
+}
+
+/// Raise the soft `RLIMIT_NOFILE` toward `min(hard, 4096)` once per process and
+/// return the resulting soft limit.
+#[cfg(unix)]
+fn descriptor_limit() -> Option<u64> {
+    static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let mut limit = unsafe { std::mem::zeroed::<libc::rlimit>() };
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+            return None;
+        }
+        let target = limit.rlim_max.min(4096);
+        if limit.rlim_cur < target {
+            let raised = libc::rlimit {
+                rlim_cur: target,
+                rlim_max: limit.rlim_max,
+            };
+            if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
+                limit.rlim_cur = target;
+            }
+        }
+        Some(limit.rlim_cur as u64)
+    })
+}
+
+#[cfg(not(unix))]
+fn descriptor_limit() -> Option<u64> {
+    None
 }
 
 fn collect_worker<T>(

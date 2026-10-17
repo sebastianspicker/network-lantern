@@ -73,3 +73,13 @@ function Get-NetworkTuningStagingBlockedRestoreStatus {
   return $status
 }
 
+
+function Test-NetworkTuningActionDeclined {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param([Parameter()][AllowNull()]$Result)
+
+  # Mutators return the string 'Skipped' when ShouldProcess declined the change.
+  # A type check is required because `$true -eq 'Skipped'` is $true in PowerShell.
+  return ($Result -is [string] -and [string]::Equals($Result, 'Skipped', [System.StringComparison]::Ordinal))
+}

@@ -20,13 +20,15 @@ function Invoke-DiagnosticsMatrix {
     $index++
     Write-Status -Level INFO -Message "RUN [$index/$total] round=$($item.RoundName) protocol=$($item.Protocol) host=$($item.Host)"
 
+    Write-Progress -Id 1 -Activity 'Network Lantern path diagnostics' -Status "[$index/$total] $($item.Host)" -PercentComplete ([int](100 * ($index - 1) / $total))
     $obj = Invoke-HostDiagnostics -PlanItem $item -Settings $Settings
     $Results.Add($obj)
 
     if ($obj.OverallStatus -eq 'OK') {
       Write-Status -Level OK -Message "round=$($item.RoundName) protocol=$($item.Protocol) host=$($item.Host) overall=OK"
     } else {
-      Write-Status -Level FAIL -Message "round=$($item.RoundName) protocol=$($item.Protocol) host=$($item.Host) failed=$($obj.FailedStages -join ',')"
+      Write-Status -Level FAIL -Message "round=$($item.RoundName) protocol=$($item.Protocol) host=$($item.Host) failed=$($obj.FailedStages -join ',') reasons=$($obj.FailureReasons -join '; ')"
     }
   }
+  Write-Progress -Id 1 -Activity 'Network Lantern path diagnostics' -Completed
 }

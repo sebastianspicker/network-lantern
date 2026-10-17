@@ -89,7 +89,15 @@ pub(super) async fn register() -> Result<HelperStatus> {
 }
 pub(super) async fn remove() -> Result<HelperStatus> {
     bundled()?;
-    let prepared = unsafe { service().status() } == SMAppServiceStatus::Enabled;
+    let current = unsafe { service().status() };
+    if matches!(
+        current,
+        SMAppServiceStatus::NotRegistered | SMAppServiceStatus::NotFound
+    ) {
+        // Nothing to unregister; removal is idempotent.
+        return status().await;
+    }
+    let prepared = current == SMAppServiceStatus::Enabled;
     if prepared {
         transport::exchange(
             transport::Message::PrepareRemoval,

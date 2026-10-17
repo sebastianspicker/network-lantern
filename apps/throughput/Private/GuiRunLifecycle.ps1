@@ -79,13 +79,37 @@ function Clear-RunCancellationContext {
   }
 }
 
+function Get-RunJobErrorText {
+  param([object]$ErrorItem)
+  if ($ErrorItem -is [System.Management.Automation.ErrorRecord]) { return [string]$ErrorItem.Exception.Message }
+  if ($ErrorItem -is [System.Exception]) { return [string]$ErrorItem.Message }
+  return [string]$ErrorItem
+}
+
+function Get-RunJobFailureMessage {
+  param([System.Management.Automation.Job]$Job)
+  # The terminating error of a failed job is on its JobStateInfo.Reason, usually of a child job.
+  foreach ($candidate in @($Job) + @($Job.ChildJobs)) {
+    if ($candidate -and $candidate.JobStateInfo -and $candidate.JobStateInfo.Reason) {
+      return (Get-RunJobErrorText -ErrorItem $candidate.JobStateInfo.Reason)
+    }
+  }
+  return $null
+}
+
 function Receive-RunJobLifecycleOutput {
   param(
     [Parameter(Mandatory)]
     [System.Management.Automation.Job]$Job
   )
   $ordinaryOutput = [System.Collections.Generic.List[object]]::new()
-  foreach ($item in @(Receive-Job -Job $Job -ErrorAction SilentlyContinue)) {
+  $jobErrors = $null
+  # Errors are collected instead of discarded so a failed run explains itself in the log.
+  $received = @(Receive-Job -Job $Job -ErrorAction SilentlyContinue -ErrorVariable jobErrors)
+  foreach ($jobError in @($jobErrors)) {
+    if ($jobError) { $ordinaryOutput.Add("ERROR: $(Get-RunJobErrorText -ErrorItem $jobError)") }
+  }
+  foreach ($item in $received) {
     $recordType = if ($item -and $item.PSObject.Properties.Name -contains 'RecordType') { [string]$item.RecordType } else { '' }
     if ($recordType -eq 'NetworkLantern.Iperf3.JobStarted') {
       if ($script:RunJobCancellationContext -and $item.RunId -eq $script:RunJobCancellationContext.RunId) {
@@ -335,6 +359,14 @@ function Update-LogAndStateFromJob {
     Update-UiBusyState -Form $Form -Busy $false
     $ProgressBar.Value = 100
     $elapsed = if ($script:RunStartTime) { [int]([datetime]::UtcNow - $script:RunStartTime).TotalSeconds } else { 0 }
+    $failureMessage = $null
+    if ($Job.State -eq 'Failed') {
+      $failureMessage = Get-RunJobFailureMessage -Job $Job
+      if ($failureMessage -and -not $LogBox.Text.Contains($failureMessage)) {
+        $LogBox.AppendText("ERROR: $failureMessage`r`n")
+        $LogBox.ScrollToCaret()
+      }
+    }
     if ($script:RunCancellationRequested) {
       $verifiedCleanup = if ($script:RunJobCancellationContext) {
         Get-VerifiedRunCleanupRecord -Job $Job `
@@ -351,7 +383,12 @@ function Update-LogAndStateFromJob {
     }
     elseif ($script:RunIsPreview) {
       $StatusLabel.Text = "Preview failed (${elapsed}s)"
-      Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage 'The plan could not be calculated. Review the run log and correct the settings.'
+      $previewError = if ($failureMessage) { "The plan could not be calculated: $failureMessage" } else { 'The plan could not be calculated. Review the run log and correct the settings.' }
+      Set-GuiPlanSummaryState -Form $Form -State Error -ErrorMessage $previewError
+    }
+    elseif ($failureMessage) {
+      $firstLine = ($failureMessage -split '\r?\n')[0]
+      $StatusLabel.Text = "Failed: $firstLine (${elapsed}s)"
     }
     elseif ($script:LastRunSummary) {
       $StatusLabel.Text = "Done: $($script:LastRunSummary.Status) (${elapsed}s)"

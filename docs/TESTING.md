@@ -4,6 +4,12 @@ Run every command from the repository root. Routine verification uses controlled
 fakes and preview paths; it must not contact live targets or change Windows
 settings.
 
+The behavioral test suites (Pester, Bats, Vitest, Playwright and WebdriverIO,
+Rust integration and architecture tests) are maintained in a separate private
+repository and are not part of this tree; their paths are ignored here. The public
+gate and CI run ShellCheck, the secret scan, PSScriptAnalyzer, Rust formatting,
+Clippy, the inline Rust unit tests, and the CLI, helper and desktop builds.
+
 ## Toolchain
 
 | Dependency | Version | Used by |
@@ -14,7 +20,7 @@ settings.
 | ShellCheck | Not pinned | Bash static analysis |
 | Git | Not pinned | Prerequisite reporting and contributor checks |
 | Node.js | 22+ | Desktop checks; development only |
-| Rust | 1.96.0 | Pinned Cargo workspace and native desktop builds |
+| Rust | 1.96.0 via rustup | Pinned Cargo workspace and native desktop builds; a Homebrew or distribution `cargo` earlier on `PATH` ignores `rust-toolchain.toml`, and newer Clippy releases fail the gate, so check that `cargo --version` reports 1.96.0 |
 
 `iperf3`, `mtr`, and `column` are operator dependencies, not requirements for the
 automated gate.
@@ -60,6 +66,14 @@ If the complete gate cannot run (for example, `pwsh` is unavailable), run the
 checks that can (`make lint`, `scripts/ci-rust.sh`), and name
 every skipped check and the resulting gap when reporting. A PowerShell-only run
 of `scripts/ci.ps1 -NoInstall` is not equivalent to the gate.
+
+When `pwsh` is missing, `scripts/ci-legacy.sh` runs `make lint` and a
+grep-based secret scan with the same patterns as `Invoke-SecretScan.ps1`,
+prints that the PowerShell checks (PSScriptAnalyzer, PowerShell secret scan)
+were SKIPPED, and exits 3 (not 2, which make uses for failures), so the gate is not reported as passed.
+`scripts/ci-local.sh` still runs the Rust gate and then exits with that status.
+Set `NETWORK_LANTERN_ALLOW_PARTIAL_GATE=1` to exit 0 after the same message;
+the skipped checks are still a gap to name when reporting.
 
 By default, the gate installs no operating-system packages and no PowerShell
 modules. Where current-user PowerShell module installation is allowed, run:

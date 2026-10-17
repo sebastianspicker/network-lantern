@@ -11,7 +11,7 @@
   sensitive system directory. This does not bypass elevation or restore
   validation and is outside the supported alpha surface.
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [ValidateSet('Apply', 'Backup', 'Restore', 'Verify')]
   [string]$Action = 'Apply',

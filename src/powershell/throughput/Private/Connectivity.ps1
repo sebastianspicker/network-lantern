@@ -64,8 +64,11 @@ function Test-Iperf3TcpConnection {
     $remoteAddress = $ComputerName
     $remoteAddressFamily = $null
     if ($connected -and $client.Connected -and $client.Client.RemoteEndPoint -is [System.Net.IPEndPoint]) {
-      $remoteAddress = [string]$client.Client.RemoteEndPoint.Address
-      $remoteAddressFamily = [string]$client.Client.RemoteEndPoint.AddressFamily
+      $endpointAddress = $client.Client.RemoteEndPoint.Address
+      # A dual-mode socket reports an IPv4 peer as ::ffff:a.b.c.d. It is an IPv4 path, so iperf3 must not get -6.
+      if ($endpointAddress.IsIPv4MappedToIPv6) { $endpointAddress = $endpointAddress.MapToIPv4() }
+      $remoteAddress = [string]$endpointAddress
+      $remoteAddressFamily = [string]$endpointAddress.AddressFamily
     }
     return [pscustomobject]@{
       TcpTestSucceeded  = ($connected -and $client.Connected)
@@ -198,6 +201,13 @@ function Get-Iperf3StackFromTcpResult {
     [object]$Tcp
   )
 
+  # An IPv4-mapped IPv6 address is an IPv4 path even when the socket family says InterNetworkV6.
+  $remoteAddress = if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddress') { [string]$Tcp.RemoteAddress } else { '' }
+  $parsedAddress = $null
+  if ([System.Net.IPAddress]::TryParse($remoteAddress, [ref]$parsedAddress) -and $parsedAddress.IsIPv4MappedToIPv6) {
+    return 'IPv4'
+  }
+
   if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddressFamily') {
     switch ([string]$Tcp.RemoteAddressFamily) {
       'InterNetworkV6' { return 'IPv6' }
@@ -205,7 +215,6 @@ function Get-Iperf3StackFromTcpResult {
     }
   }
 
-  $remoteAddress = if ($Tcp.PSObject.Properties.Name -contains 'RemoteAddress') { [string]$Tcp.RemoteAddress } else { '' }
   if ($remoteAddress -match ':') {
     return 'IPv6'
   }

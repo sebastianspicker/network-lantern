@@ -139,9 +139,9 @@ function ConvertTo-Iperf3KnownValue {
     'ConnectTimeoutMs' { return (ConvertTo-Iperf3IntInRange -Value $Value -Key 'ConnectTimeoutMs' -Min 1000 -Max 300000) }
     'RetryCount' { return (ConvertTo-Iperf3IntInRange -Value $Value -Key 'RetryCount' -Min 0 -Max 5) }
     'MaxTotalTests' { return (ConvertTo-Iperf3IntInRange -Value $Value -Key 'MaxTotalTests' -Min 0 -Max 1000000) }
-    'ThresholdMinThroughputMbps' { return (ConvertTo-Iperf3DoubleInRange -Value $Value -Key 'ThresholdMinThroughputMbps' -Min 0 -Max 1000000) }
+    'ThresholdMinThroughputMbps' { return (ConvertTo-Iperf3DoubleInRange -Value $Value -Key 'ThresholdMinThroughputMbps' -Min 0 -Max ([double]::MaxValue)) }
     'ThresholdMaxLossPct' { return (ConvertTo-Iperf3DoubleInRange -Value $Value -Key 'ThresholdMaxLossPct' -Min 0 -Max 100) }
-    'ThresholdMaxJitterMs' { return (ConvertTo-Iperf3DoubleInRange -Value $Value -Key 'ThresholdMaxJitterMs' -Min 0 -Max 1000000) }
+    'ThresholdMaxJitterMs' { return (ConvertTo-Iperf3DoubleInRange -Value $Value -Key 'ThresholdMaxJitterMs' -Min 0 -Max ([double]::MaxValue)) }
     'UdpLossThreshold' { return (ConvertTo-Iperf3DoubleInRange -Value $Value -Key 'UdpLossThreshold' -Min 0 -Max 100) }
     'MtuSizes' {
       $arr = @(ConvertTo-Iperf3IntArray -Value $Value)

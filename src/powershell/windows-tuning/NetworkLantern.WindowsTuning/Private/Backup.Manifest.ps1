@@ -48,6 +48,13 @@ function Test-NetworkTuningBackupManifestComponentMap {
     $matchingKeys = @($componentKeys | Where-Object {
         [string]::Equals($_, [string]$componentName, [System.StringComparison]::Ordinal)
       })
+    if ($matchingKeys.Count -eq 0 -and
+        $script:NetworkTuningBackupComponentSinceSchema.ContainsKey([string]$componentName) -and
+        $Manifest.ContainsKey('SchemaVersion') -and
+        [int]$Manifest['SchemaVersion'] -lt [int]$script:NetworkTuningBackupComponentSinceSchema[[string]$componentName]) {
+      # Written before this component existed: treated as not backed up.
+      continue
+    }
     if ($matchingKeys.Count -ne 1) {
       return [pscustomobject]@{ IsValid = $false; Message = "Backup manifest is missing component state: $componentName" }
     }

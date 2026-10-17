@@ -173,18 +173,16 @@ Requires PowerShell 7+ and iperf3 3.7+ on PATH.
 #>
 [CmdletBinding()]
 param(
+  # Value validation is explicit (see the bound-parameter check below) so that a bad argument
+  # exits 11 instead of failing parameter binding with a host-level exit code of 1.
   [string]$Target,
 
-  [ValidateRange(1, 65535)]
   [int]$Port,
 
-  [ValidateRange(1, 3600)]
   [int]$Duration,
 
-  [ValidateRange(0, 60)]
   [int]$Omit,
 
-  [ValidateNotNullOrEmpty()]
   [string]$OutDir,
 
   [switch]$Quiet,
@@ -197,54 +195,40 @@ param(
 
   [switch]$SkipReachabilityCheck,
 
-  [ValidateNotNullOrEmpty()]
   [int[]]$MtuSizes,
 
-  [ValidateRange(1000, 300000)]
   [int]$ConnectTimeoutMs,
 
-  [ValidateNotNullOrEmpty()]
   [string]$UdpStart,
 
-  [ValidateNotNullOrEmpty()]
   [string]$UdpMax,
 
-  [ValidateNotNullOrEmpty()]
   [string]$UdpStep,
 
-  [ValidateRange(0, 100)]
   [double]$UdpLossThreshold,
 
-  [ValidateNotNullOrEmpty()]
   [int[]]$TcpStreams,
 
-  [ValidateNotNullOrEmpty()]
   [string[]]$TcpWindows,
 
-  [ValidateNotNullOrEmpty()]
   [string[]]$DscpClasses,
 
-  [ValidateSet('IPv4', 'IPv6', 'Auto')]
   [string]$IpVersion,
 
   [switch]$Force,
 
   [switch]$WhatIf,
 
-  [ValidateSet('TCP', 'UDP', 'Both')]
   [string]$Protocol,
 
   [switch]$SingleTest,
 
-  [ValidateRange(0, 5)]
   [int]$RetryCount,
 
-  [ValidateRange(0, 1000000)]
   [int]$MaxTotalTests,
 
   [nullable[double]]$ThresholdMinThroughputMbps,
 
-  [ValidateRange(0, 100)]
   [nullable[double]]$ThresholdMaxLossPct,
 
   [nullable[double]]$ThresholdMaxJitterMs,
@@ -314,6 +298,25 @@ if ($DeleteProfile -and ($SaveProfile -or $ListProfiles)) {
 $defaultParams = Get-NetworkThroughputDefaultParameterSet
 $forwardParams = @{}
 
+# Validate directly supplied values with the module's own rules (the same ranges and sets as the
+# Measure-NetworkThroughput parameters). Failures exit 11 as documented.
+try {
+  $boundValues = @{}
+  foreach ($key in $PSBoundParameters.Keys) {
+    if ($defaultParams.ContainsKey($key)) {
+      $value = $PSBoundParameters[$key]
+      # An explicit $null (for example a nullable threshold) means "not set".
+      if ($null -eq $value) { continue }
+      $boundValues[$key] = if ($value -is [System.Management.Automation.SwitchParameter]) { $value.IsPresent } else { $value }
+    }
+  }
+  $null = Invoke-ThroughputParameterNormalization -Parameters $boundValues -AllowedKeys @($defaultParams.Keys) -Strict $true
+}
+catch {
+  Write-Error -Message "Invalid parameter: $($_.Exception.Message)" -ErrorAction Continue
+  exit $EC_InputValidation
+}
+
 if ($ConfigurationPath) {
   try {
     $configBasePath = (Get-Location).Path
@@ -321,9 +324,11 @@ if ($ConfigurationPath) {
     $configRaw = Read-ThroughputConfigurationFile -Path $resolvedConfigPath -BasePath $configBasePath
     $configHash = ConvertFrom-Json -InputObject $configRaw -AsHashtable -Depth 32 -ErrorAction Stop
     Write-Verbose "Loaded $($configHash.Count) key(s) from configuration file: $resolvedConfigPath"
+    $knownConfig = @{}
     foreach ($key in $configHash.Keys) {
       if ($defaultParams.ContainsKey($key)) {
-        $forwardParams[$key] = $configHash[$key]
+        # A null value means "not set" and is never forwarded.
+        if ($null -ne $configHash[$key]) { $knownConfig[$key] = $configHash[$key] }
       }
       elseif ($StrictConfiguration) {
         throw "Unknown configuration key '$key'."
@@ -331,6 +336,13 @@ if ($ConfigurationPath) {
       else {
         Write-Warning "Unknown configuration key '$key' ignored."
       }
+    }
+    # Validate against the same ranges and sets as the module parameters. Invalid values warn and are
+    # ignored, or fail with exit 11 under -StrictConfiguration.
+    $configValidation = Invoke-ThroughputParameterNormalization -Parameters $knownConfig -AllowedKeys @($defaultParams.Keys) -Strict ([bool]$StrictConfiguration)
+    foreach ($warning in $configValidation.Warnings) { Write-Warning $warning }
+    foreach ($key in $configValidation.Parameters.Keys) {
+      $forwardParams[$key] = $configValidation.Parameters[$key]
     }
   }
   catch {

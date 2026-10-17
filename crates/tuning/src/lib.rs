@@ -30,10 +30,6 @@ impl TuningExecutor {
         Self
     }
 
-    pub async fn inspect(&self, plan: &TuningPlan) -> Result<TuningResult> {
-        native::execute(plan, &CancellationToken::new(), true).await
-    }
-
     pub async fn execute(
         &self,
         plan: &TuningPlan,

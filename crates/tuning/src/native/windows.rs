@@ -211,6 +211,15 @@ fn restore_staged(
         match kind {
             ArtifactKind::SystemProfile => restore_registry(&staged.read(kind)?, true)?,
             ArtifactKind::AfdParameters => restore_registry(&staged.read(kind)?, false)?,
+            ArtifactKind::TcpipQos => {
+                // Validated and digest-checked, but restoring `Do not use NLA` is not
+                // implemented by the native engine; the PowerShell module restores it.
+                result.warnings.push(format!(
+                    "{} is verified but not restored by the native engine",
+                    kind.file_name()
+                ));
+                continue;
+            }
             ArtifactKind::QosPolicies => {
                 let desired = crate::backup::parse_qos_clixml(&staged.read(kind)?)?;
                 let current = read_qos(cim)?;
@@ -238,7 +247,9 @@ fn restore_staged(
 
 fn component(kind: ArtifactKind) -> TuningComponent {
     match kind {
-        ArtifactKind::SystemProfile | ArtifactKind::AfdParameters => TuningComponent::Registry,
+        ArtifactKind::SystemProfile | ArtifactKind::AfdParameters | ArtifactKind::TcpipQos => {
+            TuningComponent::Registry
+        }
         ArtifactKind::QosPolicies => TuningComponent::QosPolicies,
         ArtifactKind::NicAdvanced => TuningComponent::NicAdvanced,
         ArtifactKind::NicRsc => TuningComponent::Rsc,
@@ -312,6 +323,7 @@ fn publish_backup(
         let components = BackupManifestComponents {
             system_profile: true,
             afd_parameters: true,
+            tcpip_qos: false,
             qos_policies: true,
             nic_advanced: artifacts.contains_key(&ArtifactKind::NicAdvanced),
             nic_rsc: artifacts.contains_key(&ArtifactKind::NicRsc),

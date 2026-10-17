@@ -48,14 +48,17 @@ export function profileList(names: string[]): string {
 
 export function runList(runs: RunsPage['runs']): string {
   return runs.map(item => {
-    const status = item.summary?.status ? String(item.summary.status) : '';
-    const label = status || errorMessage(item.error || 'Unavailable');
+    // Interrupted runs have measurement records but no summary to open.
+    const incomplete = item.status === 'Incomplete';
+    const status = item.summary?.status ? String(item.summary.status) : incomplete ? 'Incomplete' : '';
+    const label = item.summary?.status ? status : errorMessage(item.error || 'Unavailable');
     const cells = [
       `<td class="data">${e(item.summary?.timestamp || item.path)}</td>`,
       `<td><span class="status" data-status="${e(status || 'unavailable')}">${e(label)}</span></td>`,
       `<td class="figure">${e(item.summary?.total ?? 'Unavailable')}</td>`,
     ];
-    return `<tr>${cells.join('')}<td class="row-action"><button class="secondary compact" data-report="${e(item.path)}">Open</button></td></tr>`;
+    const action = incomplete ? '' : `<button class="secondary compact" data-report="${e(item.path)}">Open</button>`;
+    return `<tr>${cells.join('')}<td class="row-action">${action}</td></tr>`;
   }).join('');
 }
 

@@ -260,21 +260,37 @@ pub struct TracePlan {
     pub ipv4_hosts: Vec<String>,
     pub ipv6_hosts: Vec<String>,
     pub total_items: u64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+fn is_tcp(probe_type: TraceType) -> bool {
+    matches!(probe_type, TraceType::Tcp4 | TraceType::Tcp6)
+}
+
+/// TCP SYN probes have a fixed size, so the MTU1400 round would repeat Standard.
+fn round_applies(round: TraceRound, probe_type: TraceType) -> bool {
+    !(round == TraceRound::Mtu1400 && is_tcp(probe_type))
 }
 
 impl TracePlan {
     pub fn items(&self) -> impl Iterator<Item = TracePlanItem> + '_ {
         self.rounds.iter().copied().flat_map(move |round| {
             self.types.iter().copied().flat_map(move |probe_type| {
+                let applies = round_applies(round, probe_type);
                 let hosts = match probe_type.family() {
                     AddressFamily::Ipv4 => &self.ipv4_hosts,
                     AddressFamily::Ipv6 => &self.ipv6_hosts,
                 };
-                hosts.iter().cloned().map(move |host| TracePlanItem {
-                    round,
-                    probe_type,
-                    host,
-                })
+                hosts
+                    .iter()
+                    .filter(move |_| applies)
+                    .cloned()
+                    .map(move |host| TracePlanItem {
+                        round,
+                        probe_type,
+                        host,
+                    })
             })
         })
     }
@@ -294,8 +310,11 @@ pub fn build_plan(
     for host in ipv4_hosts.iter().chain(ipv6_hosts) {
         path_io::validate_host(host)?;
     }
-    let total_items = rounds.iter().try_fold(0u64, |total, _| {
+    let total_items = rounds.iter().try_fold(0u64, |total, round| {
         types.iter().try_fold(total, |total, probe_type| {
+            if !round_applies(*round, *probe_type) {
+                return Some(total);
+            }
             let hosts = match probe_type.family() {
                 AddressFamily::Ipv4 => ipv4_hosts.len(),
                 AddressFamily::Ipv6 => ipv6_hosts.len(),
@@ -311,12 +330,17 @@ pub fn build_plan(
     if total_items == 0 {
         return Err(ProbeError::InvalidPlan("no trace runs planned".into()));
     }
+    let mut warnings = Vec::new();
+    if rounds.contains(&TraceRound::Mtu1400) && types.iter().any(|&t| is_tcp(t)) {
+        warnings.push("MTU1400 round skipped for TCP trace: SYN probes have a fixed size".into());
+    }
     Ok(TracePlan {
         rounds: rounds.to_vec(),
         types: types.to_vec(),
         ipv4_hosts: ipv4_hosts.to_vec(),
         ipv6_hosts: ipv6_hosts.to_vec(),
         total_items,
+        warnings,
     })
 }
 
@@ -365,6 +389,7 @@ const MAX_OUTSTANDING_PROBES: usize = 512;
 const MAX_DNS_QUERIES: usize = 8;
 const FINAL_REPLY_GRACE: Duration = Duration::from_secs(5);
 const PROBE_CLEANUP_GRACE: Duration = Duration::from_millis(250);
+const MAX_FAILED_CYCLES: u8 = 3;
 const MAX_ERROR_BYTES: usize = 16 * 1024;
 
 pub async fn execute_run(
@@ -419,6 +444,8 @@ async fn execute_run_with_probe(
     let mut pending = vec![0u16; usize::from(configured.cycles)];
     let mut destination_bound = None::<u8>;
     let mut known_hops = vec![false; usize::from(configured.max_hops) + 1];
+    let mut cycle_had_ok = vec![false; usize::from(configured.cycles)];
+    let mut failed_cycle_streak = 0u8;
     let mut errors = Vec::new();
     let mut status = TraceRunStatus::Completed;
     let mut final_grace_deadline = None;
@@ -456,6 +483,10 @@ async fn execute_run_with_probe(
                         Ok((cycle, probe_ttl, result)) => {
                             pending[usize::from(cycle)] -= 1;
                             if cycle < cadence.cycles && pending[usize::from(cycle)] == 0 { completed_cycles += 1; }
+                            if result.is_ok() {
+                                cycle_had_ok[usize::from(cycle)] = true;
+                            }
+                            let cycle_finished = cycle < cadence.cycles && pending[usize::from(cycle)] == 0;
                             match result {
                                 Ok(hop) => {
                                     known_hops[usize::from(probe_ttl)] |= hop.address.is_some();
@@ -466,8 +497,18 @@ async fn execute_run_with_probe(
                                     let fatal = matches!(error, ProbeError::Permission { .. } | ProbeError::Unsupported { .. });
                                     extend_errors(&mut errors, [format!("cycle {} TTL {probe_ttl}: {error}", cycle + 1)]);
                                     if fatal { status = TraceRunStatus::PartialFailure; run_token.cancel(); break; }
+                                    if cycle_finished && !cycle_had_ok[usize::from(cycle)] {
+                                        failed_cycle_streak += 1;
+                                        if failed_cycle_streak >= MAX_FAILED_CYCLES {
+                                            extend_errors(&mut errors, [format!("stopping after {MAX_FAILED_CYCLES} cycles in which every probe failed: {error}")]);
+                                            status = TraceRunStatus::PartialFailure;
+                                            run_token.cancel();
+                                            break;
+                                        }
+                                    }
                                 }
                             }
+                            if cycle_finished && cycle_had_ok[usize::from(cycle)] { failed_cycle_streak = 0; }
                         }
                         Err(error) => { extend_errors(&mut errors, [format!("trace probe task failed: {error}")]); status = TraceRunStatus::PartialFailure; run_token.cancel(); break; }
                     }
@@ -541,13 +582,19 @@ async fn execute_run_with_probe(
         .filter_map(|(ttl, values)| values.finish(ttl as u8))
         .collect();
     let mut enrichment_complete = false;
+    let needs_asn = matches!(item.probe_type, TraceType::As4 | TraceType::As6);
+    // Reverse-name failures are reported but only affect the status of AS traces.
+    let mut enrichment_error_count = 0;
     if status == TraceRunStatus::Completed {
-        let needs_asn = matches!(item.probe_type, TraceType::As4 | TraceType::As6);
-        match settings.dns_resolver.or_else(dns::system_resolver) {
-            Some(resolver) => {
+        let resolvers = match settings.dns_resolver {
+            Some(resolver) => vec![resolver],
+            None => dns::system_resolvers(),
+        };
+        match resolvers.is_empty() {
+            false => {
                 let enrichment = enrich_hops(
                     &mut hops,
-                    resolver,
+                    &resolvers,
                     settings.dns_timeout,
                     needs_asn,
                     &run_token,
@@ -570,13 +617,15 @@ async fn execute_run_with_probe(
                         } else {
                             enrichment_complete = enrichment_errors.is_empty();
                         }
+                        let before = errors.len();
                         extend_errors(&mut errors, enrichment_errors);
+                        enrichment_error_count = errors.len() - before;
                     }
                 }
             }
-            None if needs_asn => errors
+            true if needs_asn => errors
                 .push("ASN DNS enrichment: no DNS resolver was configured or discoverable".into()),
-            None => enrichment_complete = true,
+            true => enrichment_complete = true,
         }
     }
     if status == TraceRunStatus::Completed
@@ -584,7 +633,12 @@ async fn execute_run_with_probe(
     {
         errors.push("no trace probe responses were received".into());
     }
-    if status == TraceRunStatus::Completed && !errors.is_empty() {
+    let status_errors = if needs_asn {
+        errors.len()
+    } else {
+        errors.len() - enrichment_error_count
+    };
+    if status == TraceRunStatus::Completed && status_errors > 0 {
         status = TraceRunStatus::PartialFailure;
     }
     normalize_errors(&mut errors);
@@ -709,7 +763,7 @@ struct CycleProbe {
 
 async fn enrich_hops(
     hops: &mut [TraceHop],
-    resolver: SocketAddr,
+    resolvers: &[SocketAddr],
     timeout: Duration,
     needs_asn: bool,
     cancellation: &CancellationToken,
@@ -727,9 +781,10 @@ async fn enrich_hops(
         while tasks.len() < MAX_DNS_QUERIES && !pending.is_empty() {
             let address = pending.pop().expect("pending DNS address");
             let token = cancellation.clone();
+            let resolvers = resolvers.to_vec();
             tasks.spawn(async move {
                 let mut query_errors = Vec::new();
-                let hostname = match dns::reverse_name(address, resolver, timeout, &token).await {
+                let hostname = match dns::reverse_name(address, &resolvers, timeout, &token).await {
                     Ok(value) => value,
                     Err(error) => {
                         query_errors.push(format!("PTR {address}: {error}"));
@@ -737,7 +792,7 @@ async fn enrich_hops(
                     }
                 };
                 let asn = if needs_asn {
-                    match dns::lookup_asn(address, resolver, timeout, &token).await {
+                    match dns::lookup_asn(address, &resolvers, timeout, &token).await {
                         Ok(value) => value,
                         Err(error) => {
                             query_errors.push(format!("ASN {address}: {error}"));
@@ -998,5 +1053,52 @@ mod tests {
         assert_eq!(result.hops[0].statistics.cancelled, 0);
         assert_eq!(result.hops[0].statistics.loss_percent, 100.0);
         assert!(!result.errors.iter().any(|error| error.contains("shutdown")));
+    }
+
+    fn failing_probe(
+        _probe: &CycleProbe,
+        _cycle: u16,
+        _ttl: u8,
+        _cancellation: &CancellationToken,
+    ) -> Result<path_io::HopResult, ProbeError> {
+        Err(ProbeError::Io {
+            operation: "send probe",
+            message: "network unreachable".into(),
+        })
+    }
+
+    #[tokio::test]
+    async fn consecutive_all_failed_cycles_stop_the_run() {
+        let (item, mut settings) = isolated_trace();
+        settings.cycles = 10;
+        let result =
+            execute_run_with_probe(&item, &settings, &CancellationToken::new(), failing_probe)
+                .await
+                .unwrap();
+        assert_eq!(result.status, TraceRunStatus::PartialFailure);
+        assert!(result.completed_cycles < 10);
+        assert!(result.errors.iter().any(|error| {
+            error.contains("stopping after 3 cycles in which every probe failed")
+                && error.contains("network unreachable")
+        }));
+    }
+
+    #[test]
+    fn mtu1400_round_is_skipped_for_tcp_with_warning() {
+        let plan = build_plan(
+            &[TraceRound::Standard, TraceRound::Mtu1400],
+            &[TraceType::Icmp4, TraceType::Tcp4],
+            &["v4.example".into()],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(plan.total_items, 3);
+        assert_eq!(plan.items().count(), 3);
+        assert!(
+            !plan
+                .items()
+                .any(|item| item.round == TraceRound::Mtu1400 && item.probe_type == TraceType::Tcp4)
+        );
+        assert_eq!(plan.warnings.len(), 1);
     }
 }

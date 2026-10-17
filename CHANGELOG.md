@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Alpha readiness remediation
+
+- Run native path probes and the throughput ICMP preflight without root: ICMP
+  sockets fall back to unprivileged datagram sockets (macOS; Linux within
+  `net.ipv4.ping_group_range`), and TCP traces on macOS and unprivileged Linux use
+  per-probe `connect()` with the hop limit set. `doctor` reports the socket access
+  it actually has instead of assuming it.
+- Report why a measurement failed in the run summary's `warnings`, count partly
+  failed hosts as partial failures, and add `-v`/`--verbose`,
+  `NETWORK_LANTERN_LOG` and a per-run `run.log` for bug reports.
+- Accept system-owned symlinked ancestors such as macOS `/tmp` and `/var` in
+  output and profile paths; user-created links are still refused and named.
+- List runs newest first by start time, including interrupted runs; add
+  `NETWORK_LANTERN_HOSTS_FILE`, inline `hosts.conf` comments and a warning when
+  built-in hosts are used; pin reviewed tuning plans with
+  `expected_operation_hash`/`--expect-hash`; refuse tuning on non-Windows hosts
+  before a run directory is created.
+- Throughput engine: reject port 0, use 1440-byte UDP datagrams over IPv6, skip
+  short stray datagrams, report cancellation during retries as cancellation, cap
+  pacer catch-up bursts, try every resolved address, and send non-zero payloads.
+- Path engines: keep MPLS labels when extensions carry padding or more than 64
+  labels, skip the MTU1400 round for TCP traces with a warning, stop runs after
+  three cycles in which every probe failed, use the dominant responder as the hop
+  address, try every system resolver, and keep PTR failures from failing non-AS
+  traces.
+- Helper: no panic on a young monotonic clock, distinct errors for a missing
+  systemd unit, idempotent removal, and logged connection errors.
+- Legacy PowerShell and Bash: per-tool path timeouts and output-based status,
+  validated throughput configuration and arguments (exit 11), iperf3 JSON errors
+  honoured by retries, partial results kept on interruption, Rust v2 profile
+  stores read, a `-Summary` table, and an explained `mtr` permission failure.
+  Windows tuning backs up and restores the QoS "Do not use NLA" value (manifest
+  schema 4), accepts hosts without NIC/RSC rows, restores only values it changes,
+  reports declined actions as skipped, and guards its staging cleanup with an
+  allowlist.
+
 ### Security fixes
 
 - Require explicit Administrators ownership and exact protected ACLs for Windows

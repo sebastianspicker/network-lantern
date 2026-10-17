@@ -15,6 +15,18 @@ function Get-Iperf3UdpSaturationStepCount {
   return [math]::Min(([int][decimal]::Floor($span / $decimalStep) + 1), $MaxIterations)
 }
 
+# iperf3 -J reports connection failures as a JSON body with a non-empty "error" key (plus exit 1),
+# so a parsed body alone does not prove the test produced results.
+function Test-Iperf3RunFailedWithoutResults {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][object]$Run)
+  if ($Run.ExitCode -eq 0) { return $false }
+  if ($null -eq $Run.Json) { return $true }
+  $names = @($Run.Json.PSObject.Properties.Name)
+  return ($names -contains 'error' -and -not [string]::IsNullOrWhiteSpace([string]$Run.Json.error))
+}
+
 function Invoke-SingleIperf3TestAndAddResult {
   [CmdletBinding()]
   [OutputType([pscustomobject])]
@@ -72,11 +84,11 @@ function Invoke-SingleIperf3TestAndAddResult {
   }
   if ($UdpBw) { $invokeParams['UdpBw'] = $UdpBw }
   $run = Invoke-Iperf3 @invokeParams
-  # Retry on transient failure: non-zero exit AND no JSON (no partial results to salvage)
+  # Retry on transient failure: non-zero exit AND (no JSON or a JSON "error"), i.e. no results to salvage
   $attempt = 0
-  while ($run.ExitCode -ne 0 -and $null -eq $run.Json -and $attempt -lt $retryCount) {
+  while ((Test-Iperf3RunFailedWithoutResults -Run $run) -and $attempt -lt $retryCount) {
     $attempt++
-    Write-Verbose "Test #$No failed (exit $($run.ExitCode), no JSON). Retry $attempt/$retryCount in $($script:RetryDelayMs)ms..."
+    Write-Verbose "Test #$No failed (exit $($run.ExitCode), no usable JSON). Retry $attempt/$retryCount in $($script:RetryDelayMs)ms..."
     Start-Sleep -Milliseconds $script:RetryDelayMs
     $run = Invoke-Iperf3 @invokeParams
   }
@@ -86,7 +98,7 @@ function Invoke-SingleIperf3TestAndAddResult {
 }
 
 # Ramps UDP bandwidth from CurMbps to MaxMbps in StepMbps increments for each direction (TX, RX).
-# Stops early when packet loss exceeds UdpLossThreshold or iperf3 fails without JSON output.
+# Stops early when packet loss exceeds UdpLossThreshold or iperf3 fails without JSON output or with a JSON error.
 # This finds the practical bandwidth ceiling for each DSCP class under the current network conditions.
 function Invoke-UdpSaturationForDscp {
   [CmdletBinding()]
@@ -148,7 +160,7 @@ function Invoke-UdpSaturationForDscp {
       $res = Invoke-SingleIperf3TestAndAddResult -AllResultsList $AllResultsList -CsvRowsList $CsvRowsList -No $testNo -Proto 'UDP' -Dir $dir -DSCP $Dscp -Tos $Tos -Window '' -UdpBw $bwStr -Stack $Stack -Target $Target -Port $Port -Duration $Duration -Omit $Omit -ConnectTimeoutMs $ConnectTimeoutMs -Caps $Caps
       $run = $res.Run
       $m = $res.Metrics
-      if ($run.ExitCode -ne 0 -and $null -eq $run.Json) { break }
+      if (Test-Iperf3RunFailedWithoutResults -Run $run) { break }
       if ($null -ne $m.LossPct -and [double]$m.LossPct -gt $UdpLossThreshold) { break }
     }
   }

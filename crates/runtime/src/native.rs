@@ -17,6 +17,14 @@ impl NativeExecution {
             .status()
             .await
             .is_ok_and(|status| status.service_reachable && status.authorized);
+        log::info!(
+            "helper selection: {}",
+            if use_helper {
+                "authorized helper"
+            } else {
+                "in-process native sockets"
+            }
+        );
         Ok(Self { run_id, use_helper })
     }
 

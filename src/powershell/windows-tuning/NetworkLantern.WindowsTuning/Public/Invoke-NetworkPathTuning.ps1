@@ -13,7 +13,7 @@ function Invoke-NetworkPathTuning {
     sensitive system directory. This does not bypass elevation or restore
     validation and is outside the supported alpha surface.
   #>
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
   param(
     [ValidateSet('Apply', 'Backup', 'Restore', 'Verify')]
     [string]$Action = 'Apply',
@@ -75,7 +75,19 @@ function Invoke-NetworkPathTuning {
     Assert-NetworkTuningAdministrator
   }
 
-  if (-not $DryRun -and $Action -in @('Apply', 'Backup')) {
+  # Single confirmation point for Apply and Restore. Internal mutators run with
+  # -Confirm:$false so the user answers one prompt, not one per item. -WhatIf and a
+  # declined prompt both end here without any mutation.
+  $declined = $false
+  if (-not $DryRun -and $Action -in @('Apply', 'Restore')) {
+    $confirmTarget = if ($Action -eq 'Apply') { "tuning profile $TuningProfile" } else { "backup folder $BackupFolder" }
+    $confirmAction = if ($Action -eq 'Apply') { "Apply tuning profile $TuningProfile" } else { "Restore from backup $BackupFolder" }
+    if (-not $PSCmdlet.ShouldProcess($confirmTarget, $confirmAction)) {
+      $declined = $true
+    }
+  }
+
+  if (-not $DryRun -and -not $declined -and $Action -in @('Apply', 'Backup')) {
     New-NetworkTuningDirectory -Path $BackupFolder | Out-Null
   }
 
@@ -85,13 +97,22 @@ function Invoke-NetworkPathTuning {
   $warnings = [System.Collections.Generic.List[string]]::new()
   $success = $true
 
-  if ($Action -eq 'Backup') {
+  if ($declined) {
+    $skippedNames = if ($Action -eq 'Apply') {
+      @('Backup', 'LocalQos', 'QosPortPolicies', 'QosAppPolicies', 'NicPowerSaving', 'PowerPlan')
+    } else {
+      @('Manifest', 'Registry', 'Qos', 'NicAdvanced', 'Rsc', 'PowerPlan')
+    }
+    foreach ($name in $skippedNames) { $components[$name] = 'Skipped' }
+  } elseif ($Action -eq 'Backup') {
     $backupResult = Backup-NetworkTuningState -BackupFolder $BackupFolder -DryRun:$DryRun
     $backupStatus = Resolve-NetworkTuningRestoreStatus -Result $backupResult -DefaultIfNull 'OK'
     $components['Backup'] = $backupStatus
     $success = $backupStatus -ne 'Warn'
   } elseif ($Action -eq 'Restore') {
-    $restoreStatus = Restore-NetworkTuningState -BackupFolder $BackupFolder -DryRun:$DryRun
+    # The cmdlet's ShouldProcess call above is the confirmation point: internal mutators must
+    # not prompt per item (a prompt fails under -NonInteractive).
+    $restoreStatus = Restore-NetworkTuningState -BackupFolder $BackupFolder -DryRun:$DryRun -Confirm:$false
     foreach ($name in $restoreStatus.Keys) {
       $components[$name] = $restoreStatus[$name]
       if ($restoreStatus[$name] -eq 'Warn') {
@@ -122,6 +143,8 @@ function Invoke-NetworkPathTuning {
     try {
       $localQosEnabled = [string](Get-ItemProperty -Path $script:NetworkTuningRegistryPathQos -Name 'Do not use NLA' -ErrorAction Stop).'Do not use NLA' -eq '1'
     } catch {
+      $warnings.Add("Could not read the local QoS registry value: $($_.Exception.Message)") | Out-Null
+      Write-Warning -Message ("Could not read the local QoS registry value; LocalQos is reported as Unknown. ({0})" -f $_.Exception.Message)
       $localQosEnabled = $null
     }
 
@@ -195,8 +218,8 @@ function Invoke-NetworkPathTuning {
     }
 
     try {
-      Enable-NetworkTuningLocalQosMarking -DryRun:$DryRun
-      $components['LocalQos'] = if ($DryRun) { 'Skipped' } else { 'OK' }
+      $localQosResult = Enable-NetworkTuningLocalQosMarking -DryRun:$DryRun -Confirm:$false
+      $components['LocalQos'] = if ($DryRun -or (Test-NetworkTuningActionDeclined -Result $localQosResult)) { 'Skipped' } else { 'OK' }
     } catch {
       $warnings.Add("LocalQos failed: $($_.Exception.Message)") | Out-Null
       $components['LocalQos'] = 'Warn'
@@ -206,11 +229,13 @@ function Invoke-NetworkPathTuning {
     if ($normalizedPorts.Count -gt 0) {
       try {
         $qosPortPoliciesSucceeded = $true
+        $qosPortPoliciesAppliedCount = 0
         foreach ($port in $normalizedPorts) {
-          $policyResult = New-NetworkTuningDscpPolicyByPort -Name ("{0}{1}" -f $script:NetworkTuningQosPortPrefix, $port) -PortStart $port -PortEnd $port -Dscp $Dscp -DryRun:$DryRun
+          $policyResult = New-NetworkTuningDscpPolicyByPort -Name ("{0}{1}" -f $script:NetworkTuningQosPortPrefix, $port) -PortStart $port -PortEnd $port -Dscp $Dscp -DryRun:$DryRun -Confirm:$false
           if ($false -eq $policyResult) { $qosPortPoliciesSucceeded = $false }
+          elseif (-not (Test-NetworkTuningActionDeclined -Result $policyResult)) { $qosPortPoliciesAppliedCount++ }
         }
-        $components['QosPortPolicies'] = if ($DryRun) { 'Skipped' } elseif ($qosPortPoliciesSucceeded) { 'OK' } else { 'Warn' }
+        $components['QosPortPolicies'] = if ($DryRun -or ($qosPortPoliciesSucceeded -and $qosPortPoliciesAppliedCount -eq 0)) { 'Skipped' } elseif ($qosPortPoliciesSucceeded) { 'OK' } else { 'Warn' }
         if (-not $DryRun -and -not $qosPortPoliciesSucceeded) {
           $warnings.Add('QosPortPolicies failed: one or more port policies could not be created.') | Out-Null
           $success = $false
@@ -228,12 +253,14 @@ function Invoke-NetworkPathTuning {
       try {
         $i = 0
         $qosAppPoliciesSucceeded = $true
+        $qosAppPoliciesAppliedCount = 0
         foreach ($path in $normalizedApps) {
           $i++
-          $appPolicyResult = New-NetworkTuningDscpPolicyByApp -Name ("{0}{1}" -f $script:NetworkTuningQosAppPrefix, $i) -ExePath $path -Dscp $Dscp -DryRun:$DryRun
+          $appPolicyResult = New-NetworkTuningDscpPolicyByApp -Name ("{0}{1}" -f $script:NetworkTuningQosAppPrefix, $i) -ExePath $path -Dscp $Dscp -DryRun:$DryRun -Confirm:$false
           if ($false -eq $appPolicyResult) { $qosAppPoliciesSucceeded = $false }
+          elseif (-not (Test-NetworkTuningActionDeclined -Result $appPolicyResult)) { $qosAppPoliciesAppliedCount++ }
         }
-        $components['QosAppPolicies'] = if ($DryRun) { 'Skipped' } elseif ($qosAppPoliciesSucceeded) { 'OK' } else { 'Warn' }
+        $components['QosAppPolicies'] = if ($DryRun -or ($qosAppPoliciesSucceeded -and $qosAppPoliciesAppliedCount -eq 0)) { 'Skipped' } elseif ($qosAppPoliciesSucceeded) { 'OK' } else { 'Warn' }
         if (-not $DryRun -and -not $qosAppPoliciesSucceeded) {
           $warnings.Add('QosAppPolicies failed: one or more app policies could not be created.') | Out-Null
           $success = $false
@@ -249,8 +276,8 @@ function Invoke-NetworkPathTuning {
 
     if ($TuningProfile -eq 'Measured') {
       try {
-        $nicResult = Set-NetworkTuningNicConfiguration -DryRun:$DryRun
-        $components['NicPowerSaving'] = if ($DryRun) { 'Skipped' } elseif ($false -eq $nicResult) { 'Warn' } else { 'OK' }
+        $nicResult = Set-NetworkTuningNicConfiguration -DryRun:$DryRun -Confirm:$false
+        $components['NicPowerSaving'] = if ($DryRun -or (Test-NetworkTuningActionDeclined -Result $nicResult)) { 'Skipped' } elseif ($false -eq $nicResult) { 'Warn' } else { 'OK' }
         if (-not $DryRun -and $false -eq $nicResult) {
           $warnings.Add('NicPowerSaving failed: one or more NIC settings could not be changed.') | Out-Null
           $success = $false
@@ -267,8 +294,8 @@ function Invoke-NetworkPathTuning {
     $effectivePowerPlan = if ($PowerPlan -eq 'None' -and $TuningProfile -eq 'Measured') { 'HighPerformance' } else { $PowerPlan }
     if ($effectivePowerPlan -ne 'None') {
       try {
-        $powerPlanResult = Set-NetworkTuningPowerPlan -PowerPlan $effectivePowerPlan -DryRun:$DryRun
-        $components['PowerPlan'] = if ($DryRun) { 'Skipped' } elseif ($false -eq $powerPlanResult) { 'Warn' } else { 'OK' }
+        $powerPlanResult = Set-NetworkTuningPowerPlan -PowerPlan $effectivePowerPlan -DryRun:$DryRun -Confirm:$false
+        $components['PowerPlan'] = if ($DryRun -or (Test-NetworkTuningActionDeclined -Result $powerPlanResult)) { 'Skipped' } elseif ($false -eq $powerPlanResult) { 'Warn' } else { 'OK' }
         if (-not $DryRun -and $false -eq $powerPlanResult) {
           $warnings.Add('PowerPlan failed: the selected power plan could not be activated.') | Out-Null
           $success = $false

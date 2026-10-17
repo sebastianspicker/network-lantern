@@ -402,6 +402,12 @@ fn hex_upper(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02X}")).collect()
 }
 
+/// Oldest instant still inside the nonce window, or `None` when the monotonic
+/// clock is younger than the TTL (nothing can have expired yet).
+fn expiry_cutoff(now: Instant) -> Option<Instant> {
+    now.checked_sub(NONCE_TTL)
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ReplayCache {
     entries: HashMap<[u8; 32], Instant>,
@@ -410,14 +416,15 @@ pub(crate) struct ReplayCache {
 
 impl ReplayCache {
     pub(crate) fn accept(&mut self, nonce: [u8; 32]) -> Result<()> {
-        let cutoff = Instant::now() - NONCE_TTL;
-        while self
-            .order
-            .front()
-            .is_some_and(|key| self.entries.get(key).is_some_and(|seen| *seen < cutoff))
-        {
-            if let Some(key) = self.order.pop_front() {
-                self.entries.remove(&key);
+        if let Some(cutoff) = expiry_cutoff(Instant::now()) {
+            while self
+                .order
+                .front()
+                .is_some_and(|key| self.entries.get(key).is_some_and(|seen| *seen < cutoff))
+            {
+                if let Some(key) = self.order.pop_front() {
+                    self.entries.remove(&key);
+                }
             }
         }
         if self.entries.contains_key(&nonce) {
@@ -437,6 +444,11 @@ impl ReplayCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expiry_cutoff_never_panics_and_precedes_now() {
+        let now = Instant::now();
+        assert!(expiry_cutoff(now).is_none_or(|cutoff| cutoff < now));
+    }
     #[test]
     fn rejects_replay_and_tampering() {
         let secret = [7; 32];

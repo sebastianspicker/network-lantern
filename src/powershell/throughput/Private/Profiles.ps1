@@ -208,6 +208,81 @@ function Read-Iperf3ProfilesStore {
   return $store
 }
 
+function Expand-Iperf3ProfileEntry {
+  <#
+  .SYNOPSIS
+  Returns the PowerShell parameter hashtable stored in a profile entry.
+  .DESCRIPTION
+  Version 1 stores (and flat version 2 entries) hold the parameters directly. The Rust CLI may
+  store a versioned envelope ({schema_version, capability, parameters}) whose parameters use
+  snake_case names. The envelope is unwrapped and the names that have a direct PowerShell
+  equivalent are translated (retry.max_retries becomes RetryCount, tcp_windows_bytes becomes
+  TcpWindows, the udp_*_bps rates become UdpStart/UdpMax/UdpStep). Rust-only settings are
+  dropped with one informational message per profile; any other name is left untouched so
+  normal validation warns about it. A null value means "not set". An envelope whose capability
+  is not 'throughput' is skipped with a warning and yields no parameters. The stored entry
+  itself is never modified.
+  #>
+  [CmdletBinding()]
+  [OutputType([hashtable])]
+  param([AllowNull()][object]$Entry, [string]$ProfileName = '')
+  $hash = ConvertTo-Iperf3HashtableFromObject -InputObject $Entry
+  $isEnvelope = ($hash.ContainsKey('schema_version') -or $hash.ContainsKey('capability')) -and
+    $hash.ContainsKey('parameters') -and
+    ($hash['parameters'] -is [System.Collections.IDictionary] -or $hash['parameters'] -is [pscustomobject])
+  if (-not $isEnvelope) { return $hash }
+  $label = if ([string]::IsNullOrEmpty($ProfileName)) { 'profile' } else { "profile '$ProfileName'" }
+  if ($hash.ContainsKey('capability') -and [string]$hash['capability'] -ine 'throughput') {
+    Write-Warning "Skipping ${label}: its capability is '$($hash['capability'])', not 'throughput'."
+    return @{}
+  }
+  $names = @{
+    target = 'Target'; port = 'Port'; protocol = 'Protocol'; duration_secs = 'Duration'; omit_secs = 'Omit'
+    single_test = 'SingleTest'; connect_timeout_ms = 'ConnectTimeoutMs'; max_total_tests = 'MaxTotalTests'
+    ip_version = 'IpVersion'; dscp_classes = 'DscpClasses'; tcp_streams = 'TcpStreams'
+    disable_mtu_probe = 'DisableMtuProbe'; skip_reachability_check = 'SkipReachabilityCheck'; mtu_sizes = 'MtuSizes'
+    min_throughput_mbps = 'ThresholdMinThroughputMbps'; max_loss_pct = 'ThresholdMaxLossPct'
+    max_jitter_ms = 'ThresholdMaxJitterMs'; udp_loss_threshold_pct = 'UdpLossThreshold'
+  }
+  $udpRates = @{ udp_start_bps = 'UdpStart'; udp_max_bps = 'UdpMax'; udp_step_bps = 'UdpStep' }
+  # Settings of the Rust engine that the PowerShell tool has no parameter for.
+  $rustOnly = @('control_timeout_ms', 'bidirectional', 'max_control_json_bytes')
+  $inner = ConvertTo-Iperf3HashtableFromObject -InputObject $hash['parameters']
+  $expanded = @{}
+  $ignored = [System.Collections.Generic.List[string]]::new()
+  foreach ($key in @($inner.Keys | Sort-Object)) {
+    $value = $inner[$key]
+    if ($null -eq $value) { continue }
+    if ($key -eq 'retry') {
+      if ($value -is [System.Collections.IDictionary] -or $value -is [pscustomobject]) {
+        $retry = ConvertTo-Iperf3HashtableFromObject -InputObject $value
+        if ($retry.ContainsKey('max_retries')) { $expanded['RetryCount'] = $retry['max_retries'] }
+        if ($retry.ContainsKey('backoff_ms')) { $ignored.Add('retry.backoff_ms') }
+      } else {
+        $expanded['RetryCount'] = $value
+      }
+    } elseif ($key -eq 'tcp_windows_bytes') {
+      $expanded['TcpWindows'] = @($value | ForEach-Object { if ($null -eq $_) { 'default' } else { [string]$_ } })
+    } elseif ($udpRates.ContainsKey($key)) {
+      $bps = 0.0
+      if ([double]::TryParse([string]$value, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$bps) -and $bps -gt 0) {
+        $expanded[$udpRates[$key]] = ($bps / 1000).ToString('R', [System.Globalization.CultureInfo]::InvariantCulture) + 'K'
+      } else {
+        $expanded[$key] = $value
+      }
+    } elseif ($key -in $rustOnly) {
+      $ignored.Add($key)
+    } else {
+      $target = if ($names.ContainsKey($key)) { $names[$key] } else { $key }
+      $expanded[$target] = $value
+    }
+  }
+  if ($ignored.Count -gt 0) {
+    Write-Information -InformationAction Continue -MessageData "Ignoring Rust-only setting(s) in $label with no PowerShell equivalent: $($ignored -join ', ')."
+  }
+  return $expanded
+}
+
 function Invoke-LockedProfileOperation {
   <#
   .SYNOPSIS
@@ -308,7 +383,7 @@ function Get-Iperf3ProfileParametersCore {
   if (-not $store['profiles'].ContainsKey($ProfileName)) {
     Write-Iperf3Error -Message "Profile '$ProfileName' not found in '$($Resolution.Path)'. Use -ListProfiles to see available profile names." -ErrorId 'NetworkLantern.Throughput.InputValidation' -TargetObject $ProfileName
   }
-  $rawParams = ConvertTo-Iperf3HashtableFromObject -InputObject $store['profiles'][$ProfileName]
+  $rawParams = Expand-Iperf3ProfileEntry -Entry $store['profiles'][$ProfileName] -ProfileName $ProfileName
   $allowed = Get-Iperf3ProfileStorableKeys
   return (ConvertTo-Iperf3NormalizedParameterSet -InputParameters $rawParams -AllowedKeys $allowed -StrictConfiguration:$StrictConfiguration).Parameters
 }
@@ -326,6 +401,8 @@ function Save-Iperf3ProfileCore {
   $allowed = Get-Iperf3ProfileStorableKeys
   $toStore = @{}
   foreach ($key in $allowed) {
+    # Force and Quiet are per-run switches; a stored Force would silently overwrite outputs on every later run.
+    if ($key -in @('Force', 'Quiet')) { continue }
     if ($Parameters.ContainsKey($key)) { $toStore[$key] = $Parameters[$key] }
   }
   $normalized = ConvertTo-Iperf3NormalizedParameterSet -InputParameters $toStore -AllowedKeys $allowed -StrictConfiguration:$StrictConfiguration

@@ -3,7 +3,7 @@ function Get-NetworkTuningRegistryBackupContract {
   [OutputType([pscustomobject])]
   param(
     [Parameter(Mandatory)]
-    [ValidateSet('SystemProfile', 'AfdParameters')]
+    [ValidateSet('SystemProfile', 'AfdParameters', 'TcpipQos')]
     [string]$Name
   )
 
@@ -37,6 +37,23 @@ function Get-NetworkTuningRegistryBackupContract {
     }
   }
 
+  if ($Name -eq 'TcpipQos') {
+    return [pscustomobject]@{
+      Name = 'TcpipQos'
+      RegistryPath = $script:NetworkTuningRegistryPathQos
+      ArtifactName = $script:NetworkTuningBackupFileTcpipQos
+      Sections = @(
+        [pscustomobject]@{
+          RegistryPath = $script:NetworkTuningRegistryPathQos
+          RegPath = 'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\QoS'
+          Values = [ordered]@{
+            'Do not use NLA' = 'String'
+          }
+        }
+      )
+    }
+  }
+
   return [pscustomobject]@{
     Name = 'AfdParameters'
     RegistryPath = $script:NetworkTuningRegistryPathAfdParameters
@@ -61,7 +78,7 @@ function Get-NetworkTuningRegistryBackupContractForPath {
     [string]$RegistryPath
   )
 
-  foreach ($contractName in @('SystemProfile', 'AfdParameters')) {
+  foreach ($contractName in @('SystemProfile', 'AfdParameters', 'TcpipQos')) {
     $contract = Get-NetworkTuningRegistryBackupContract -Name $contractName
     if ($contract.RegistryPath -ieq $RegistryPath) {
       return $contract
@@ -106,7 +123,7 @@ function Test-NetworkTuningRegistryBackupFile {
     [string]$InFile,
 
     [Parameter(Mandatory)]
-    [ValidateSet('SystemProfile', 'AfdParameters')]
+    [ValidateSet('SystemProfile', 'AfdParameters', 'TcpipQos')]
     [string]$ContractName
   )
 
@@ -275,7 +292,7 @@ function Import-NetworkTuningRegistryFile {
     [string]$InFile,
 
     [Parameter(Mandatory)]
-    [ValidateSet('SystemProfile', 'AfdParameters')]
+    [ValidateSet('SystemProfile', 'AfdParameters', 'TcpipQos')]
     [string]$ContractName
   )
 

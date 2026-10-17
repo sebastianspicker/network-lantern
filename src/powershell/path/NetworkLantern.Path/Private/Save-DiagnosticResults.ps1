@@ -98,7 +98,7 @@ function Save-DiagnosticResults {
   $jsonContent = ConvertTo-Json -InputObject @($Results) -Depth 6
   Publish-DiagnosticArtifact -Path $JsonPath -Content $jsonContent -Encoding $utf8NoBom
 
-  $csvLines = $Results | Select-Object Timestamp, Round, Protocol, @{ Name = 'Host'; Expression = { Protect-DiagnosticCsvValue $_.Host } }, PingStatus, TracertStatus, PathpingStatus, Tcp443Status, PortsStatus, OverallStatus, PingOk, TracertOk, PathpingOk, Tcp443OK | ConvertTo-Csv -NoTypeInformation
+  $csvLines = $Results | Select-Object Timestamp, Round, Protocol, @{ Name = 'Host'; Expression = { Protect-DiagnosticCsvValue $_.Host } }, PingStatus, TracertStatus, PathpingStatus, Tcp443Status, PortsStatus, OverallStatus, PingOk, TracertOk, PathpingOk, Tcp443OK, @{ Name = 'Notes'; Expression = { Protect-DiagnosticCsvValue (@($_.FailureReasons) -join '; ') } } | ConvertTo-Csv -NoTypeInformation
   $csvContent = $csvLines -join [Environment]::NewLine
   Publish-DiagnosticArtifact -Path $CsvPath -Content $csvContent -Encoding $utf8NoBom
 

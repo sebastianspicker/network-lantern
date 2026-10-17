@@ -1,5 +1,8 @@
 use super::{begin_probe, cancelled_sample, timeout_sample};
-use crate::{HopResult, ProbeError, ProbeIdentity, RoundParameters, Sample, SampleStatus};
+use crate::{
+    HopResult, NativeAccess, ProbeError, ProbeIdentity, RoundParameters, Sample, SampleStatus,
+    TcpTraceMode,
+};
 use lantern_packet::{
     AddressFamily, IcmpKind, ProbeKey, TransportProtocol, build_icmpv4_echo, build_icmpv6_echo,
     parse_icmp_response,
@@ -209,6 +212,9 @@ pub fn tcp_trace_scoped(
     }
     let family = family(target.ip());
     let source_port = 49_152u16 + rand::random::<u16>() % 16_383;
+    // Without administrator rights there is no ICMP listener and only the
+    // destination can be detected; `native_access()` reports this as
+    // `windows_tcp_intermediate_hops: false`.
     let icmp = match RawSocket::new_icmp(family, Duration::from_millis(50)) {
         Ok(socket) => Some(socket),
         Err(ProbeError::Permission { .. } | ProbeError::Unsupported { .. }) => None,
@@ -356,6 +362,7 @@ pub fn tcp_trace_probe_scoped(
     // Windows supplies the TCP sequence number, so a per-probe source port is
     // the correlation identity for quoted TCP headers.
     let source_port = 49_152 + (identity.ordinal % 16_383) as u16;
+    // See `tcp_trace_scoped`: unelevated traces detect only the destination.
     let icmp = match RawSocket::new_icmp(family, Duration::from_millis(50)) {
         Ok(socket) => Some(socket),
         Err(ProbeError::Permission { .. } | ProbeError::Unsupported { .. }) => None,
@@ -504,6 +511,28 @@ pub fn tcp_trace_probe_scoped(
     })
 }
 
+/// Report which native sockets this process may open. Each socket is opened and
+/// immediately closed; no packet is sent.
+pub fn native_access() -> NativeAccess {
+    let opens = |domain, protocol| Socket::new(domain, Type::RAW, Some(protocol)).is_ok();
+    let raw_icmpv4 = opens(Domain::IPV4, Protocol::ICMPV4);
+    let raw_icmpv6 = opens(Domain::IPV6, Protocol::ICMPV6);
+    let raw_ip_sender = opens(Domain::IPV4, Protocol::from(255));
+    // Windows grants raw sockets only to elevated (administrator) tokens.
+    let elevated = raw_icmpv4 || raw_icmpv6;
+    NativeAccess {
+        raw_icmpv4,
+        raw_icmpv6,
+        datagram_icmpv4: false,
+        datagram_icmpv6: false,
+        raw_ip_sender,
+        tcp_trace_mode: TcpTraceMode::Connect,
+        elevated: Some(elevated),
+        windows_tcp_intermediate_hops: Some(elevated),
+        traffic_class_supported: false,
+    }
+}
+
 struct RawSocket {
     socket: Socket,
 }
@@ -592,6 +621,8 @@ fn set_socket_traffic_class(
     let Some(value) = value else {
         return Ok(());
     };
+    // Windows accepts these options but ignores them unless QoS policy allows
+    // user-set TOS; `native_access()` reports `traffic_class_supported: false`.
     match family {
         AddressFamily::Ipv4 => socket
             .set_tos_v4(value.into())

@@ -4,7 +4,7 @@ members = ["crates/contracts", "crates/platform", "crates/runtime", "crates/cli"
 default-members = ["crates/cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -23,6 +23,7 @@ uuid = { version = "1.20.0", features = ["v4", "serde"] }
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "serde"] }
 tempfile = "3.25.0"
 sha2 = "0.10.9"
+log = "0.4"
 
 csv = "1.4.0"
 quick-xml = "0.38.4"

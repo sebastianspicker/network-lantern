@@ -48,6 +48,18 @@ Each result record carries `PingStatus`, `TracertStatus`, `PathpingStatus`,
 `PathpingStatus` is `Skipped`. `Ports` is always an empty array and `PortsStatus`
 is always `Skipped`; both fields are retained for existing consumers.
 
+`TracertStatus` and `PathpingStatus` come from the parsed output (the last hop
+must be the destination), not from the native exit code. Failed stages are
+listed in `FailedStages`, with a reason per stage in `FailureReasons` (JSON) and
+the `Notes` column (CSV), for example `Pathping: timed out after 900 s` or the
+DNS error for a failed TCP 443 check. Each native tool runs under a timeout
+derived from the configured probes, timeouts, and hops; `-ToolTimeoutSec`
+overrides it (0 keeps the derived value). `-LogDirectory` is resolved once
+against the current PowerShell location (`~` is expanded). Accepted ranges:
+`-PingCount` 1-1000, `-TraceMaxHops` 1-255, `-TraceTimeoutMs` 1-60000,
+`-PathpingProbes` 1-1000, `-PathpingTimeoutMs` 1-60000, `-ToolTimeoutSec`
+0-86400.
+
 The process exits 1 when any planned run has `OverallStatus` equal to `Fail`.
 Validation and execution errors also return a nonzero status. If execution is
 interrupted after at least one result is collected, the script tries to write the
@@ -88,7 +100,12 @@ Run it:
 ```
 
 A live run needs Bash 4+, `mtr`, and `jq`. The text summary also needs `column`;
-pass `--no-summary` when it is missing. Each `mtr` command requests 300 report
+pass `--no-summary` when it is missing. `mtr` needs raw-socket privileges: run
+with `sudo`, or on macOS make `mtr-packet` setuid root (Homebrew: `sudo chown root
+"$(command -v mtr-packet)" && sudo chmod 4755 "$(command -v mtr-packet)"`); on
+Linux grant `sudo setcap cap_net_raw+ep "$(command -v mtr-packet)"`. Without
+this the tool prints one `ERROR:` hint, records the `mtr` message as `_error`
+in the failure record, and stops after the first host. Each `mtr` command requests 300 report
 cycles, and commands run one at a time with a 360-second timeout. Set
 `MTR_TIMEOUT_SECONDS` to a different positive integer to change the timeout.
 

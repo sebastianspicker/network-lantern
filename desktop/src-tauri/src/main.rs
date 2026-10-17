@@ -21,8 +21,9 @@ async fn doctor() -> Value {
 }
 #[tauri::command]
 fn plan(request: Value) -> Result<Value> {
-    let request = runtime::prepare_local_request(&request)?;
+    let (request, warnings) = runtime::prepare_local_request(&request)?;
     let mut result = runtime::plan_request(&request)?;
+    runtime::add_plan_warnings(&mut result, warnings);
     result["resolved_request"] = request;
     Ok(result)
 }

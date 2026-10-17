@@ -44,12 +44,15 @@ struct RawRequest {
     #[serde(default)]
     strict: bool,
     workflow: Option<Workflow>,
+    /// The `reviewed_operation_hash` shown in the plan preview; execution refuses a changed plan.
+    expected_operation_hash: Option<String>,
 }
 pub(crate) struct Request {
     pub capability: Capability,
     pub layers: Vec<Value>,
     pub strict: bool,
     pub workflow: Option<Workflow>,
+    pub expected_operation_hash: Option<String>,
 }
 pub(crate) fn request(value: &Value) -> Result<Request> {
     if serde_json::to_vec(value)
@@ -100,5 +103,6 @@ pub(crate) fn request(value: &Value) -> Result<Request> {
         layers: request.layers,
         strict: request.strict,
         workflow: request.workflow,
+        expected_operation_hash: request.expected_operation_hash,
     })
 }

@@ -32,6 +32,11 @@ pub(crate) fn throughput_error(e: ThroughputError) -> Error {
             ErrorCategory::Validation
         }
         ThroughputError::Cancelled => ErrorCategory::Cancelled,
+        ThroughputError::RetriesExhausted { last, .. }
+            if matches!(**last, ThroughputError::Cancelled) =>
+        {
+            ErrorCategory::Cancelled
+        }
         ThroughputError::Io { source, .. }
             if source.kind() == std::io::ErrorKind::PermissionDenied =>
         {
@@ -54,4 +59,22 @@ pub(crate) fn probe_error(error: lantern_path_io::ProbeError) -> Error {
 }
 pub(crate) fn internal(error: impl std::fmt::Display) -> Error {
     Error::new(ErrorCategory::Internal, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_retry_maps_to_cancelled_category() {
+        let wrapped = ThroughputError::RetriesExhausted {
+            attempts: 2,
+            last: Box::new(ThroughputError::Cancelled),
+        };
+        assert_eq!(throughput_error(wrapped).category, ErrorCategory::Cancelled);
+        assert_eq!(
+            throughput_error(ThroughputError::Cancelled).category,
+            ErrorCategory::Cancelled
+        );
+    }
 }

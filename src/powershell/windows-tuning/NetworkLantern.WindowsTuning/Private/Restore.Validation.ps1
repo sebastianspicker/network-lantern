@@ -212,6 +212,7 @@ function Test-NetworkTuningRestoreArtifactAuthorization {
   $checks = @{
     SystemProfile = { param($path) Test-NetworkTuningRegistryBackupFile -InFile $path -ContractName 'SystemProfile' }
     AfdParameters = { param($path) Test-NetworkTuningRegistryBackupFile -InFile $path -ContractName 'AfdParameters' }
+    TcpipQos = { param($path) Test-NetworkTuningRegistryBackupFile -InFile $path -ContractName 'TcpipQos' }
     QosPolicies = { param($path) Test-NetworkTuningQosBackupArtifact -Path $path }
     NicAdvanced = { param($path) Test-NetworkTuningNicAdvancedBackupArtifact -Path $path }
     NicRsc = { param($path) Test-NetworkTuningRscBackupArtifact -Path $path }

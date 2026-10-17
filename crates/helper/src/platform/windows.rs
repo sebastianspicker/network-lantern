@@ -356,7 +356,7 @@ pub(super) async fn serve(server: HelperServer, stop: CancellationToken) -> Resu
                 if let Ok(permit) = slots.clone().try_acquire_owned() {
                     let state = service.clone();
                     let token = stop.child_token();
-                    tasks.spawn(async move { let _permit = permit; let _ = serve_connection(state, pipe, token).await; });
+                    tasks.spawn(async move { let _permit = permit; if let Err(error) = serve_connection(state, pipe, token).await { eprintln!("helper connection error: {error}"); } });
                 }
             }
         }

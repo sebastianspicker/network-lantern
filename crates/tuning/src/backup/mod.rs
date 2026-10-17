@@ -11,7 +11,9 @@ pub(crate) mod trusted_io;
 
 #[cfg(windows)]
 pub(crate) use artifacts::{NicAdvancedRow, QosPolicySpec, RegistryValue, RscRow};
-pub(crate) use artifacts::{parse_nic_csv, parse_qos_clixml, parse_registry_backup, parse_rsc_csv};
+pub(crate) use artifacts::{
+    parse_nic_csv, parse_qos_clixml, parse_registry_backup, parse_rsc_csv, parse_tcpip_qos_backup,
+};
 pub use manifest::{
     ArtifactKind, BackupManifest, BackupManifestComponents, parse_manifest_bounded,
 };
@@ -140,6 +142,9 @@ fn authorize_artifact(kind: ArtifactKind, bytes: &[u8]) -> Result<()> {
         }
         ArtifactKind::AfdParameters => {
             parse_registry_backup(bytes, false)?;
+        }
+        ArtifactKind::TcpipQos => {
+            parse_tcpip_qos_backup(bytes)?;
         }
         ArtifactKind::QosPolicies => {
             parse_qos_clixml(bytes)?;

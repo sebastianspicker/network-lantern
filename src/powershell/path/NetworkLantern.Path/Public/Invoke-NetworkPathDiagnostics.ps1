@@ -14,11 +14,12 @@ function Invoke-NetworkPathDiagnostics {
     [string[]]$HostsIPv4,
     [string[]]$HostsIPv6,
     [string]$LogDirectory = '',
-    [int]$PingCount = 5,
-    [int]$TraceMaxHops = 30,
-    [int]$TraceTimeoutMs = 5000,
-    [int]$PathpingProbes = 50,
-    [int]$PathpingTimeoutMs = 3000,
+    [ValidateRange(1, 1000)][int]$PingCount = 5,
+    [ValidateRange(1, 255)][int]$TraceMaxHops = 30,
+    [ValidateRange(1, 60000)][int]$TraceTimeoutMs = 5000,
+    [ValidateRange(1, 1000)][int]$PathpingProbes = 50,
+    [ValidateRange(1, 60000)][int]$PathpingTimeoutMs = 3000,
+    [ValidateRange(0, 86400)][int]$ToolTimeoutSec = 0,
     [ValidateSet('IPv4', 'IPv6')]
     [string[]]$Protocols = @('IPv4', 'IPv6'),
     [string[]]$Rounds = @('Standard'),
@@ -68,6 +69,8 @@ function Invoke-NetworkPathDiagnostics {
   if (-not (Test-PathSafe $LogDirectory)) {
     throw "LogDirectory must not be empty, start with '-', contain '|', control chars, or path traversal (..): $LogDirectory"
   }
+  # Resolve once through the provider so New-Item and .NET file APIs agree on ~ and relative paths.
+  $LogDirectory = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($LogDirectory)
 
   $defaultHosts4 = @('cloudflare.com', 'google.com', 'wikipedia.org', 'amazon.com')
   $defaultHosts6 = @('cloudflare.com', 'google.com', 'wikipedia.org')
@@ -129,8 +132,10 @@ function Invoke-NetworkPathDiagnostics {
   $completedNormally = $false
   $start = Get-Date
   $executionSettings = [pscustomobject]@{
-    PingCount    = $PingCount
-    SkipPathping = [bool]$SkipPathping
+    PingCount        = $PingCount
+    PathpingProbes   = $PathpingProbes
+    ToolTimeoutSec   = $ToolTimeoutSec
+    SkipPathping     = [bool]$SkipPathping
   }
   Write-Status -Level INFO -Message 'Starting diagnostics'
   try {

@@ -1,7 +1,7 @@
 //! Native iperf3 throughput planning and execution.
 //!
 //! Planning is pure and lazy. Network access happens only through
-//! [`Iperf3Client::run_test`] or [`Iperf3Client::run_plan`].
+//! [`Iperf3Client::run_test`] or [`Iperf3Client::run_test_with_retry`].
 
 mod config;
 mod error;
@@ -13,7 +13,7 @@ pub use config::{
     SuiteConfig,
 };
 pub use error::{Result, ThroughputError};
-pub use plan::{PlanRun, TestPhase, TestPlanIter, TestResult, TestSpec, ThroughputPlan, plan};
+pub use plan::{TestPhase, TestPlanIter, TestResult, TestSpec, ThroughputPlan, plan};
 pub use protocol::Iperf3Client;
 
 mod preflight;

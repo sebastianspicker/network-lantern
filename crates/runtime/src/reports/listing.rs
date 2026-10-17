@@ -1,9 +1,16 @@
 //! Bounded listing of native and legacy runs in a results directory.
-use super::normalize::read;
+use super::normalize::{field, read};
 use lantern_contracts::{Error, Result};
 use lantern_platform::{PROFILE_LIMIT, REPORT_LIMIT, read_json};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
+
+/// Summaries larger than this are ordered by mtime instead of being parsed just to sort.
+const SORT_KEY_LIMIT: usize = 256 * 1024;
+const INCOMPLETE_RUN: &str = "Run has measurement records but no summary.json (interrupted?)";
 
 /// A bounded page of native run summaries and legacy throughput summaries in `directory`.
 pub fn list_runs(directory: &Path, offset: usize, limit: usize) -> Result<Value> {
@@ -22,6 +29,8 @@ pub fn list_runs(directory: &Path, offset: usize, limit: usize) -> Result<Value>
             let summary = entry.path().join("summary.json");
             if summary.is_file() {
                 retain_run_path(&mut paths, &mut path_bytes, summary)?;
+            } else if has_measurements(&entry.path()) {
+                retain_run_path(&mut paths, &mut path_bytes, entry.path())?;
             }
         } else if entry
             .file_name()
@@ -35,11 +44,19 @@ pub fn list_runs(directory: &Path, offset: usize, limit: usize) -> Result<Value>
             retain_run_path(&mut paths, &mut path_bytes, entry.path())?;
         }
     }
-    paths.sort();
-    paths.reverse();
+    let mut keyed = paths
+        .into_iter()
+        .map(|path| (start_millis(&path), path))
+        .collect::<Vec<_>>();
+    keyed.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let paths = keyed.into_iter().map(|(_, path)| path);
     let total = paths.len();
     let mut runs = Vec::new();
-    for path in paths.into_iter().skip(offset).take(limit) {
+    for path in paths.skip(offset).take(limit) {
+        if path.is_dir() {
+            runs.push(json!({"path":path,"status":"Incomplete","error":INCOMPLETE_RUN}));
+            continue;
+        }
         match read(&path) {
             Ok(mut summary) => {
                 summary.data = Value::Null;
@@ -95,6 +112,32 @@ pub fn list_runs(directory: &Path, offset: usize, limit: usize) -> Result<Value>
     }
     Ok(page)
 }
+/// Whether a run directory without `summary.json` still holds measurement records.
+fn has_measurements(directory: &Path) -> bool {
+    std::fs::read_dir(directory).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("measurement-") && name.ends_with(".json")
+        })
+    })
+}
+/// Run start in epoch milliseconds: the report's own timestamp, else the file's mtime.
+fn start_millis(path: &Path) -> i64 {
+    if path.is_file()
+        && let Ok(report) = read_json(path, SORT_KEY_LIMIT)
+        && let Some(text) =
+            field(&report, &["timestamp", "started_utc", "startedUtc"]).and_then(Value::as_str)
+        && let Ok(time) = chrono::DateTime::parse_from_rfc3339(text)
+    {
+        return time.timestamp_millis();
+    }
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |age| i64::try_from(age.as_millis()).unwrap_or(i64::MAX))
+}
 fn retain_run_path(paths: &mut Vec<PathBuf>, bytes: &mut usize, path: PathBuf) -> Result<()> {
     let next = bytes.saturating_add(path.as_os_str().len());
     if paths.len() >= 100_000 || next > REPORT_LIMIT {
@@ -109,6 +152,56 @@ fn retain_run_path(paths: &mut Vec<PathBuf>, bytes: &mut usize, path: PathBuf) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runs_are_listed_newest_first_with_incomplete_runs_included() {
+        let dir =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        // Directory names sort opposite to start time, so path order cannot pass by luck.
+        for (name, timestamp) in [
+            ("c-oldest", "2026-01-01T00:00:00.000Z"),
+            ("a-newest", "2026-03-01T00:00:00.000Z"),
+            ("b-middle", "2026-02-01T00:00:00.000Z"),
+        ] {
+            let run = dir.path().join(name);
+            std::fs::create_dir(&run).unwrap();
+            std::fs::write(
+                run.join("summary.json"),
+                serde_json::to_vec(&json!({
+                    "schema_version":1,"status":"Success","timestamp":timestamp,
+                    "counts":{"total":1,"failed":0}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        // A crashed run has no timestamp, so its fresh mtime places it first.
+        let crashed = dir.path().join("d-crashed");
+        std::fs::create_dir(&crashed).unwrap();
+        std::fs::write(crashed.join("measurement-00000001.json"), "{}").unwrap();
+        std::fs::create_dir(dir.path().join("e-empty")).unwrap();
+        let listed = list_runs(dir.path(), 0, 20).unwrap();
+        assert_eq!(listed["total"], 4);
+        let names = listed["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|run| {
+                let path = Path::new(run["path"].as_str().unwrap());
+                let dir = if path.ends_with("summary.json") {
+                    path.parent().unwrap()
+                } else {
+                    path
+                };
+                dir.file_name().unwrap().to_string_lossy().into_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["d-crashed", "a-newest", "b-middle", "c-oldest"]);
+        assert_eq!(listed["runs"][0]["status"], "Incomplete");
+        assert_eq!(listed["runs"][0]["error"], INCOMPLETE_RUN);
+        let page = list_runs(dir.path(), 1, 2).unwrap();
+        assert_eq!(page["runs"].as_array().unwrap().len(), 2);
+        assert_eq!(page["has_more"], true);
+    }
     #[test]
     fn legacy_run_listing_does_not_duplicate_csv_sidecars() {
         let dir =

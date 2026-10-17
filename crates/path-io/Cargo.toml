@@ -9,6 +9,7 @@ lantern-packet = { path = "../packet" }
 libc.workspace = true
 rand.workspace = true
 serde.workspace = true
+log.workspace = true
 socket2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

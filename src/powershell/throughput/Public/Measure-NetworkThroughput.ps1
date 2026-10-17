@@ -86,7 +86,13 @@ function Measure-NetworkThroughput {
     if (-not (Test-ValidHostnameOrIP -Name ([string]$effective['Target']))) { Write-Iperf3Error -Message "Invalid Target: '$($effective['Target'])'. Must be a valid hostname or IP address." -ErrorId 'NetworkLantern.Throughput.InputValidation' -TargetObject $effective['Target'] }
     if ($effective['SaveProfile']) {
       if (-not $effective['ProfileName']) { Write-Iperf3Error -Message 'ProfileName is required when using -SaveProfile.' -ErrorId 'NetworkLantern.Throughput.InputValidation' }
-      $saveResult = Save-Iperf3ProfileCore -ProfileName $effective['ProfileName'] -Parameters $effective -Resolution $profileResolution -StrictConfiguration:$strict
+      # Store only what the operator bound explicitly: never computed defaults (such as the cwd-based OutDir)
+      # and never the per-run Force/Quiet switches.
+      $toSave = @{}
+      foreach ($k in $PSBoundParameters.Keys) {
+        if ($k -notin @('Force', 'Quiet') -and $effective.ContainsKey($k)) { $toSave[$k] = $PSBoundParameters[$k] }
+      }
+      $saveResult = Save-Iperf3ProfileCore -ProfileName $effective['ProfileName'] -Parameters $toSave -Resolution $profileResolution -StrictConfiguration:$strict
       if (-not $effective['Quiet']) { Write-Information -InformationAction Continue "Saved profile '$($saveResult.ProfileName)' to '$($saveResult.ProfilesFile)'." }
     }
 
@@ -148,13 +154,19 @@ function Measure-NetworkThroughput {
     $testNo = 0
     $script:ActiveRetryCount = [int]$effective['RetryCount']
     $sharedParams = @{ AllResultsList = $allResults; CsvRowsList = $csvRows; Stack = $stack; Target = [string]$effective['Target']; Port = [int]$effective['Port']; Duration = [int]$effective['Duration']; Omit = [int]$effective['Omit']; ConnectTimeoutMs = [int]$effective['ConnectTimeoutMs']; Caps = $caps; Progress = [bool]$effective['Progress']; TotalApprox = $plan.TotalApprox }
-    foreach ($dscp in $plan.DscpList) {
-      $tos = Get-TosFromDscpClass -Class $dscp
-      if ($plan.RunTcp) { Invoke-TcpMatrix @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -DirsTcpList $plan.DirsTcpList -TcpStreamsList $plan.TcpStreamsList -TcpWindowsList $plan.TcpWindowsList }
-      if ($plan.RunUdp) { Invoke-UdpMatrix @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -UdpStart ([string]$effective['UdpStart']) }
-      if ($plan.RunSingleUdp) { Invoke-UdpSingleTest @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -UdpStart ([string]$effective['UdpStart']) }
-      if ($plan.RunUdp) { Invoke-UdpSaturationMatrix @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -UdpLossThreshold ([double]$effective['UdpLossThreshold']) -CurMbps $plan.CurMbps -MaxMbps $plan.MaxMbps -StepMbps $plan.StepMbps }
+    # A mid-run failure must not discard completed measurements: remember it, write what was
+    # collected, then rethrow the original error.
+    $interruption = $null
+    try {
+      foreach ($dscp in $plan.DscpList) {
+        $tos = Get-TosFromDscpClass -Class $dscp
+        if ($plan.RunTcp) { Invoke-TcpMatrix @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -DirsTcpList $plan.DirsTcpList -TcpStreamsList $plan.TcpStreamsList -TcpWindowsList $plan.TcpWindowsList }
+        if ($plan.RunUdp) { Invoke-UdpMatrix @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -UdpStart ([string]$effective['UdpStart']) }
+        if ($plan.RunSingleUdp) { Invoke-UdpSingleTest @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -UdpStart ([string]$effective['UdpStart']) }
+        if ($plan.RunUdp) { Invoke-UdpSaturationMatrix @sharedParams -TestNoRef ([ref]$testNo) -Dscp $dscp -Tos $tos -UdpLossThreshold ([double]$effective['UdpLossThreshold']) -CurMbps $plan.CurMbps -MaxMbps $plan.MaxMbps -StepMbps $plan.StepMbps }
+      }
     }
+    catch { $interruption = $_ }
     $final = [pscustomobject]@{
       Timestamp = $ts; Target = [string]$effective['Target']; Port = [int]$effective['Port']; Stack = $stack; Iperf3Version = $caps.VersionText; BidirSupported = $caps.BidirSupported
       MtuProbe = [pscustomobject]@{ Enabled = (-not [bool]$effective['DisableMtuProbe']); Sizes = @($effective['MtuSizes']); FailedSizes = @($mtuFails) }
@@ -162,7 +174,17 @@ function Measure-NetworkThroughput {
       Results = $allResults.ToArray()
     }
     $stopwatch.Stop(); $completedUtc = (Get-Date).ToUniversalTime()
-    $finalize = Write-FinalOutputs -CsvRowsList $csvRows -AllResultsList $allResults -CsvPath $csvPath -JsonPath $jsonPath -FinalResultObject $final -OutDir ([string]$effective['OutDir']) -Timestamp $ts -StartedUtc $startedUtc.ToString('o') -CompletedUtc $completedUtc.ToString('o') -ElapsedSeconds ([math]::Round($stopwatch.Elapsed.TotalSeconds, 1)) -Iperf3Version $caps.VersionText -ThresholdMinThroughputMbps $effective['ThresholdMinThroughputMbps'] -ThresholdMaxLossPct $effective['ThresholdMaxLossPct'] -ThresholdMaxJitterMs $effective['ThresholdMaxJitterMs']
+    $interruptionParams = @{}
+    if ($interruption) { $interruptionParams['Interruption'] = [string]$interruption.Exception.Message }
+    try {
+      $finalize = Write-FinalOutputs -CsvRowsList $csvRows -AllResultsList $allResults -CsvPath $csvPath -JsonPath $jsonPath -FinalResultObject $final -OutDir ([string]$effective['OutDir']) -Timestamp $ts -StartedUtc $startedUtc.ToString('o') -CompletedUtc $completedUtc.ToString('o') -ElapsedSeconds ([math]::Round($stopwatch.Elapsed.TotalSeconds, 1)) -Iperf3Version $caps.VersionText -ThresholdMinThroughputMbps $effective['ThresholdMinThroughputMbps'] -ThresholdMaxLossPct $effective['ThresholdMaxLossPct'] -ThresholdMaxJitterMs $effective['ThresholdMaxJitterMs'] @interruptionParams
+    }
+    catch {
+      # Report the original failure when the partial write also fails.
+      if (-not $interruption) { throw }
+      Write-Warning "Partial results could not be written: $($_.Exception.Message)"
+      throw $interruption
+    }
     $final | Add-Member -MemberType NoteProperty -Name Supplemental -Value ([pscustomobject]@{ SummaryJsonPath = $finalize.SummaryJsonPath; ReportMdPath = $finalize.ReportMdPath; RunIndexPath = $finalize.RunIndexPath }) -Force
     if (-not $effective['Quiet']) {
       Write-Information -InformationAction Continue "CSV  : $csvPath"; Write-Information -InformationAction Continue "JSON : $jsonPath"
@@ -170,8 +192,10 @@ function Measure-NetworkThroughput {
       Write-Information -InformationAction Continue "Completed $testNo tests; $($finalize.FailedCount) failed. Elapsed: $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s"
       if ($finalize.ParseErrorCount -gt 0) { Write-Information -InformationAction Continue "$($finalize.ParseErrorCount) test(s) with JSON parse errors." }
       if ($testNo -eq 0 -or $finalize.FailedCount -eq $testNo) { Write-Warning 'No tests completed successfully.' }
-      if ($effective['Summary']) { Write-Information -InformationAction Continue "Tests: $testNo total" }
+      if ($effective['Summary']) { Show-Iperf3SummaryTable -Results $allResults.ToArray() }
+      if ($interruption) { Write-Warning "Run interrupted after $testNo test(s); partial results were written. $($interruption.Exception.Message)" }
     }
+    if ($interruption) { throw $interruption }
     if ($effective['PassThru']) { return $finalize.RunSummary }
   }
   catch { throw (Get-Iperf3ClassifiedErrorRecord -ErrorRecord $_ -DefaultErrorId 'NetworkLantern.Throughput.Internal') }

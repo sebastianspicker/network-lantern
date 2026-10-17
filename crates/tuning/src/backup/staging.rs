@@ -312,6 +312,7 @@ mod tests {
                 components: BackupManifestComponents {
                     system_profile: false,
                     afd_parameters: false,
+                    tcpip_qos: false,
                     qos_policies: false,
                     nic_advanced: false,
                     nic_rsc: false,
@@ -390,6 +391,7 @@ mod tests {
                 components: BackupManifestComponents {
                     system_profile: false,
                     afd_parameters: false,
+                    tcpip_qos: false,
                     qos_policies: false,
                     nic_advanced: false,
                     nic_rsc: false,

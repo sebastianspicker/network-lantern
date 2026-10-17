@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-contracts"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "chrono",
  "serde",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-helper"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "block2",
  "hmac",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-packet"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-path-basic"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lantern-packet",
  "lantern-path-io",
@@ -2115,10 +2115,11 @@ dependencies = [
 
 [[package]]
 name = "lantern-path-io"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lantern-packet",
  "libc",
+ "log",
  "rand",
  "serde",
  "socket2",
@@ -2129,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-path-trace"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lantern-packet",
  "lantern-path-io",
@@ -2142,7 +2143,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-platform"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lantern-contracts",
  "libc",
@@ -2154,8 +2155,9 @@ dependencies = [
 
 [[package]]
 name = "lantern-runtime"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
+ "chrono",
  "csv",
  "lantern-contracts",
  "lantern-helper",
@@ -2166,6 +2168,8 @@ dependencies = [
  "lantern-platform",
  "lantern-throughput",
  "lantern-tuning",
+ "libc",
+ "log",
  "serde",
  "serde_json",
  "tempfile",
@@ -2176,11 +2180,12 @@ dependencies = [
 
 [[package]]
 name = "lantern-throughput"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lantern-contracts",
  "lantern-packet",
  "lantern-path-io",
+ "log",
  "rand",
  "serde",
  "serde_json",
@@ -2194,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "lantern-tuning"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "chrono",
  "csv",
@@ -2414,12 +2419,13 @@ dependencies = [
 
 [[package]]
 name = "network-lantern"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "clap",
  "lantern-contracts",
  "lantern-platform",
  "lantern-runtime",
+ "log",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2428,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "network-lantern-desktop"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lantern-contracts",
  "lantern-runtime",

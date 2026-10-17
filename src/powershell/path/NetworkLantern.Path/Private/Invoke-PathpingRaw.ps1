@@ -8,18 +8,20 @@ function Invoke-PathpingRaw {
     Target host.
   .PARAMETER ArgBuilder
     Scriptblock that builds the pathping argument list given (ipSwitch, host).
+  .PARAMETER TimeoutSec
+    Maximum run time in seconds before the process is killed.
   .OUTPUTS
-    [pscustomobject] with Raw (string[]) and ExitCode (int) properties.
+    [pscustomobject] with Raw (string[]), ExitCode (int), TimedOut (bool) and TimeoutSec properties.
   #>
   param(
     [Parameter(Mandatory)][ValidateSet('IPv4', 'IPv6')]$Protocol,
     [Parameter(Mandatory)][string]$HostName,
-    [Parameter(Mandatory)][scriptblock]$ArgBuilder
+    [Parameter(Mandatory)][scriptblock]$ArgBuilder,
+    [Parameter(Mandatory)][int]$TimeoutSec
   )
 
   $sw = Get-ToolIpSwitch -Protocol $Protocol
   $toolArgs = & $ArgBuilder $($sw.Pathping) $HostName
   if ($toolArgs -isnot [System.Array]) { $toolArgs = @($toolArgs) }
-  $raw = pathping @toolArgs
-  return [pscustomobject]@{ Raw = $raw; ExitCode = $LASTEXITCODE }
+  return Invoke-NativeToolWithTimeout -FilePath 'pathping' -ArgumentList ([string[]]$toolArgs) -TimeoutSec $TimeoutSec
 }

@@ -19,7 +19,10 @@ async function reviewPlan(event: Event) {
     const key = fingerprint(request, control('out').value);
     const result = await command<Json>('plan', { request });
     if (token !== state.generation) return;
-    state.previewRequest = (result.resolved_request as unknown as Request | undefined) ?? request;
+    const reviewed = (result.resolved_request as unknown as Request | undefined) ?? request;
+    // Pin the reviewed operation so the runtime refuses to start a plan that changed since review.
+    const hash = (result.authorization as { reviewed_operation_hash?: unknown } | undefined)?.reviewed_operation_hash;
+    state.previewRequest = typeof hash === 'string' ? { ...reviewed, expected_operation_hash: hash } : reviewed;
     state.previewKey = key;
     setStage('ready');
     $('plan-state').textContent = 'Plan ready. Review the resolved settings before starting.';

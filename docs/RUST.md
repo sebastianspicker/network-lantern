@@ -8,7 +8,12 @@ macOS build makes no installer, signing, or operational Windows recovery claim.
 
 ## Local CLI
 
-The pinned toolchain is Rust 1.96.0. Build and inspect the CLI:
+The pinned toolchain is Rust 1.96.0 (`rust-toolchain.toml`). Use rustup's
+`cargo`: a Homebrew or distribution `cargo` earlier on `PATH` ignores the pin, and
+newer Clippy releases add lints the gate does not expect. `cargo --version` must
+report 1.96.0; if it does not, put
+`$(dirname "$(rustup which cargo --toolchain 1.96.0)")` first on `PATH`. Build and
+inspect the CLI:
 
 ```sh
 cargo build --release --locked -p network-lantern
@@ -19,9 +24,40 @@ cargo build --release --locked -p network-lantern
 ```
 
 When launched from a legacy checkout, the CLI and desktop load `config/hosts.conf`
-before applying named profiles and explicit settings. The resolved host layer is
-snapshotted for the reviewed run, so later file changes do not change its targets.
-A missing or empty file keeps the built-in fallback hosts.
+from the working directory before applying named profiles and explicit settings;
+`NETWORK_LANTERN_HOSTS_FILE` names another file (a missing file is an error).
+Text after ` #` is a comment. The resolved host layer is snapshotted for the
+reviewed run, so later file changes do not change its targets. A missing or empty
+file keeps the built-in fallback hosts, and the plan says so in its warnings.
+
+## Native socket access
+
+`network-lantern doctor --json` reports which sockets this process can open
+(`native_access`) and whether path and throughput measurements can run; it sends
+no packets. Probing needs no root on macOS and on Linux hosts that allow
+unprivileged ICMP:
+
+- ICMP echo, ICMP traces and path statistics open a raw ICMP socket when
+  permitted and otherwise fall back to an unprivileged ICMP datagram socket. On
+  Linux the fallback needs the process group inside
+  `net.ipv4.ping_group_range`.
+- UDP traces send ordinary UDP datagrams and read the ICMP replies through the
+  same socket types (the socket error queue on Linux).
+- TCP traces on macOS, and on Linux without raw-socket access, use one
+  non-blocking `connect()` per probe with the hop limit set. The destination sees
+  a completed handshake that is immediately reset; routers are identified from
+  the ICMP errors. Linux with raw access sends raw SYN probes instead.
+- The throughput preflight uses the same ICMP sockets, so the default live
+  command works unprivileged wherever `doctor` reports ICMP access.
+
+If `doctor` reports no ICMP access, run the measurement with `sudo`, register the
+helper, or (Linux) allow unprivileged ICMP. Under `sudo`, output and profile
+paths must be absolute, and the run directory is then owned by root, so inspect it
+with `sudo` too:
+
+```sh
+sudo ./target/release/network-lantern path basic --target <authorized-host> --out "$PWD/logs"
+```
 
 A preview performs no DNS lookup, connection, helper authorization, or result
 write. Profile save and delete, and helper registration, are separate explicit
@@ -55,9 +91,14 @@ their fallback behavior; use the native keys when explicitly excluding a family.
 ./target/release/network-lantern path trace --target fixture.invalid --settings '{"rounds":["Standard"],"types":["ICMP4"],"cycles":3}' --dry-run
 ```
 
-Path engines keep separate round and result semantics. Native socket access may
-require platform authorization, and AS4/AS6 enrichment sends hop addresses to Team
-Cymru DNS only when it is selected. Diagnostic text is native output, not an
+Path engines keep separate round and result semantics (see
+[Native socket access](#native-socket-access)). Every trace type looks up hop
+names (PTR) through the system resolvers, trying each `nameserver` in turn; only
+AS4/AS6 additionally send hop addresses to Team Cymru DNS for ASN data. A PTR
+failure leaves `enrichment_complete` false but does not mark a non-AS trace as
+failed. MPLS4/MPLS6 and AS4/AS6 probe with ICMP, like ICMP4/ICMP6; they differ in
+the MPLS label stacks and ASN data they report. The MTU1400 round is skipped for
+TCP traces, because SYN probes have a fixed size, and the plan warns about it. Diagnostic text is native output, not an
 imitation of Windows commands or a byte-identical MTR copy.
 
 Sampling cadence works like this:
@@ -86,6 +127,9 @@ Work cancelled before a packet is sent does not increase sent counts.
 ## Saved data
 
 Each Rust execution writes a UUID-named directory under `logs` by default.
+`runs list` shows the newest run first, ordered by each run's start timestamp, and
+lists interrupted runs that have measurement records but no summary as
+`Incomplete`.
 Measurements are atomically published separately, and the summary records planned,
 executed, failed, succeeded, and skipped counts. Records carry a schema version
 and engine provenance. Cancellation preserves completed measurements and a partial
@@ -129,12 +173,27 @@ revalidation is not a replacement for the protected Windows recovery boundary.
 
 ## Process status
 
+A host whose stages partly fail (for example a closed TCP port while ping and
+trace succeed) makes the run a partial failure; a host counts as failed only when
+no stage reached it. The summary's `warnings` name the failing host, stage and
+reason, capped at 20 entries plus a count of the rest.
+
 Throughput uses `0` for success, `11` for invalid input, `12` for missing
 prerequisites, `13` for connectivity, `14` for partial failure or threshold
 breach, `15` for total failure, and `16` for internal failure. Other CLI commands
 return `1` on failure, and SIGINT and SIGTERM map to `130` and `143` on Unix.
 Machine-readable errors contain a category and a bounded message. Measurements run
 sequentially, and a second run is rejected while the shared runtime is active.
+
+## Diagnostic logs
+
+Pass `-v`/`--verbose`, or set `NETWORK_LANTERN_LOG` to `error`, `warn` (the
+default), `info`, `debug` or `trace`, to log to stderr. During an execution the
+same lines are also written to `run.log` in the run directory (owner-only). The
+log records the accepted request, the plan size, whether the helper or in-process
+sockets are used, any socket fallback, each measurement's start and outcome, and
+every warning. Attach `run.log`, `summary.json` and the `doctor --json` output to
+bug reports.
 
 ## Verification
 
@@ -157,7 +216,10 @@ Triage, Path, Throughput, Baseline, Windows tuning, Profiles, and Reports use ty
 Rust operations. A changed configuration invalidates its preview, cancellation
 stays accessible during a run, and report pages and recent activity are bounded.
 Helper registration and removal are explicit actions, serialized against active
-measurements.
+measurements. A reviewed tuning plan carries a `reviewed_operation_hash`; the desktop
+pins it, and execution refuses a plan that changed since review. On Windows the CLI
+requires it for tuning execution: copy it from `tuning --dry-run --json` and pass
+`--expect-hash <HASH>`.
 
 Profiles and Reports keep asynchronous results attached to the selection that
 requested them. Selecting another profile or report prevents an older response
@@ -183,8 +245,12 @@ Deployment assets and cross-compilation do not establish operational acceptance 
 matching hosts.
 
 Throughput preflight checks ICMP reachability, the TCP server port, and optional
-MTU probes. For an intentionally TCP-only environment, set
-`{"skip_reachability_check":true,"disable_mtu_probe":true}` in settings.
+MTU probes, using unprivileged ICMP sockets where available (see
+[Native socket access](#native-socket-access)). For an intentionally TCP-only
+environment, or a host where `doctor` reports no ICMP access and `sudo` is not an
+option, set `{"skip_reachability_check":true,"disable_mtu_probe":true}` in
+settings. UDP tests use 1460-byte datagrams over IPv4 and 1440-byte datagrams over
+IPv6, so neither fragments on a 1500-byte path.
 
 UDP sender loss is reported over the peer's whole run when its iperf result has no
 separate omission baseline; receiver loss excludes omission. Each result records

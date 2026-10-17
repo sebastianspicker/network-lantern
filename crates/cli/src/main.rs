@@ -5,6 +5,8 @@ use lantern_runtime::{profiles::ProfileStore, reports};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode};
 
+mod logging;
+
 #[derive(Parser)]
 #[command(
     name = "network-lantern",
@@ -16,6 +18,9 @@ struct Cli {
     /// Emit compact machine-readable JSON, including errors.
     #[arg(long, global = true)]
     json: bool,
+    /// Log debug detail to stderr and run.log; NETWORK_LANTERN_LOG=error|warn|info|debug|trace sets the level.
+    #[arg(short, long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -110,6 +115,9 @@ struct Measurement {
     bidirectional: Option<bool>,
     #[arg(long, default_value = "logs")]
     out: PathBuf,
+    /// Refuse to execute unless the plan's reviewed operation hash matches (tuning plans).
+    #[arg(long, value_name = "HASH")]
+    expect_hash: Option<String>,
 }
 #[derive(Subcommand)]
 enum ProfileCommand {
@@ -185,13 +193,17 @@ async fn main() -> ExitCode {
         }
     };
     let compact = cli.json;
+    logging::init(cli.verbose);
     let throughput = matches!(cli.command, Command::Throughput(_));
     let (value, code) = match dispatch(cli.command).await {
         Ok(result) => result,
-        Err(error) => (
-            json!({"error":error}),
-            exit::for_error(throughput, error.category),
-        ),
+        Err(error) => {
+            log::error!("{}", error.message);
+            (
+                json!({"error":error}),
+                exit::for_error(throughput, error.category),
+            )
+        }
     };
     emit(&value, compact);
     ExitCode::from(code)
@@ -337,12 +349,23 @@ async fn measurement(
         map.insert("single_test".into(), json!(true));
     }
     layers.push(explicit);
-    let request =
+    let mut request =
         json!({"capability":kind,"layers":layers,"strict":options.strict,"workflow":workflow});
-    let request = lantern_runtime::prepare_local_request(&request)?;
-    let plan = lantern_runtime::plan_request(&request)?;
+    if let Some(hash) = &options.expect_hash {
+        request["expected_operation_hash"] = json!(hash);
+    }
+    log::info!(
+        "request accepted: capability={kind} strict={}",
+        options.strict
+    );
+    let (request, local_warnings) = lantern_runtime::prepare_local_request(&request)?;
+    let mut plan = lantern_runtime::plan_request(&request)?;
     if options.dry_run {
+        lantern_runtime::add_plan_warnings(&mut plan, local_warnings);
         return Ok((plan, exit::SUCCESS));
+    }
+    for warning in &local_warnings {
+        log::warn!("{warning}");
     }
     let manager = lantern_runtime::manager::RunManager::default();
     let cancel = tokio_util::sync::CancellationToken::new();

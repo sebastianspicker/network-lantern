@@ -119,7 +119,10 @@ default.
 | 15 | all tests failed |
 | 16 | internal or unclassified failure |
 
-The orchestrator returns the child exit code unchanged.
+The orchestrator returns the child exit code unchanged. Invalid command-line
+values, such as `-Port 99999`, exit 11 before any work starts: range and set
+errors exit 11. A value that cannot be converted to the parameter type, such as
+`-Port abc`, fails parameter binding and exits 1.
 
 ## Configuration and profiles
 
@@ -131,8 +134,12 @@ profile. Values resolve in this order:
 3. named profile
 4. module default
 
-Unknown or invalid values warn and are ignored unless you pass
-`-StrictConfiguration`.
+Unknown keys and values outside a parameter's range or set warn and are ignored
+unless you pass `-StrictConfiguration`, which fails with exit 11. Profiles are
+saved with only the parameters you passed explicitly, never `-Force`, `-Quiet`,
+or the default output directory. The profile store may be version 1 or the
+version 2 format written by the Rust CLI; both are read, and the version of an
+existing store is kept when PowerShell saves a profile.
 
 Named profiles use `.iperf3/profiles.json` in the current directory by default:
 
@@ -173,7 +180,13 @@ does not honor `-WhatIf`.
 Direct live runs default to `./logs` and write timestamped result CSV and JSON, a
 summary JSON document, a Markdown report, and `iperf3_run_index.json`. `-Force`
 lets a run overwrite a timestamped output collision. `-OpenOutputFolder` opens the
-output directory after a run on a supported desktop platform.
+output directory after a run on a supported desktop platform. `-Summary` also
+prints a table with one row per test: number, protocol, direction, DSCP class,
+streams, window, TX and RX Mbps, loss, jitter, and result.
+
+If an error stops the matrix part-way, the results collected so far are still
+written and the summary JSON carries `Partial` and `Interruption` fields; the
+original error is then reported as usual.
 
 Primary JSON, CSV, and Markdown artifacts each use an exclusive temporary file
 beside their destination, flushed and closed before atomic replacement. A failed

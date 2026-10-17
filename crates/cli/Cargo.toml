@@ -11,5 +11,6 @@ clap.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+log.workspace = true
 [dev-dependencies]
 tempfile.workspace = true

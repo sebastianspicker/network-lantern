@@ -12,10 +12,41 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub use native::{
-    measure_hops, measure_hops_scoped, ping, ping_scoped, ping_scoped_with_ttl, tcp_trace,
-    tcp_trace_probe_scoped, tcp_trace_scoped, trace, trace_probe_scoped, trace_scoped, udp_trace,
-    udp_trace_probe_scoped, udp_trace_scoped,
+    measure_hops, measure_hops_scoped, native_access, ping, ping_scoped, ping_scoped_with_ttl,
+    tcp_trace, tcp_trace_probe_scoped, tcp_trace_scoped, trace, trace_probe_scoped, trace_scoped,
+    udp_trace, udp_trace_probe_scoped, udp_trace_scoped,
 };
+
+/// How a TCP trace emits its probes on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TcpTraceMode {
+    /// Hand-built SYN segments through a raw IP socket; the destination never
+    /// completes a handshake.
+    Raw,
+    /// Kernel `connect()` per probe; the destination sees a completed
+    /// handshake followed by RST.
+    Connect,
+}
+
+/// Native socket capabilities available to the current process. Probing these
+/// opens and immediately closes sockets; it sends no packets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeAccess {
+    pub raw_icmpv4: bool,
+    pub raw_icmpv6: bool,
+    pub datagram_icmpv4: bool,
+    pub datagram_icmpv6: bool,
+    pub raw_ip_sender: bool,
+    pub tcp_trace_mode: TcpTraceMode,
+    /// Whether the process runs elevated. Reported on Windows only.
+    pub elevated: Option<bool>,
+    /// Whether Windows TCP traces can observe intermediate hops; without a raw
+    /// ICMP listener they only detect the destination. Reported on Windows only.
+    pub windows_tcp_intermediate_hops: Option<bool>,
+    /// Whether a requested IPv4 TOS / IPv6 traffic class reaches the wire.
+    pub traffic_class_supported: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProbeIdentity {

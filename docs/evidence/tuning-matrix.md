@@ -32,6 +32,12 @@ not part of any current profile.
 
 - Apply must produce and validate a complete backup before it mutates anything.
 - The backup manifest records schema and component metadata plus artifact digests.
+- Restore writes back only values Apply changes. Backups record the Tcpip QoS
+  `Do not use NLA` state (schema 4); older manifests without it skip that value
+  with a warning. SystemProfile and AFD exports are not imported.
+- Restore staging cleanup deletes only a direct child of the staging root whose
+  name matches the staging pattern and which holds the staging marker file.
+- A declined confirmation is reported as `Skipped`, never `OK`.
 - Restore validates manifest structure, compatibility, component state, artifacts,
   digests, registry content, and backup path trust.
 - Restore consumes a protected staged copy and revalidates it before each

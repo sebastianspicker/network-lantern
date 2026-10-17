@@ -22,11 +22,19 @@ $script:NetworkTuningCompatibleToolNames = @($script:NetworkTuningToolName, 'net
 $script:NetworkTuningBackupFileManifest = 'backup_manifest.json'
 $script:NetworkTuningBackupFileSystemProfile = 'SystemProfile.reg'
 $script:NetworkTuningBackupFileAfdParameters = 'AFD_Parameters.reg'
+$script:NetworkTuningBackupFileTcpipQos = 'Tcpip_QoS.reg'
 $script:NetworkTuningBackupFileQosOurs = 'qos_ours.xml'
 $script:NetworkTuningBackupFileNicAdvanced = 'nic_advanced_backup.csv'
 $script:NetworkTuningBackupFileRsc = 'rsc_backup.csv'
 $script:NetworkTuningBackupFilePowerplan = 'powerplan.txt'
-$script:NetworkTuningBackupSchemaVersion = 3
+$script:NetworkTuningBackupSchemaVersion = 4
+# Components added after schema 1: older manifests may omit them (the item is then not restored).
+# Maps component name -> first schema version that records it.
+$script:NetworkTuningBackupComponentSinceSchema = @{ TcpipQos = 4 }
+# Restore staging directories: leaf naming pattern and the marker file written into each one.
+$script:NetworkTuningRestoreStagingLeafPrefix = 'NetworkLantern-Restore-'
+$script:NetworkTuningRestoreStagingLeafPattern = '^NetworkLantern-Restore-[0-9a-f]{32}\z'
+$script:NetworkTuningRestoreStagingMarkerName = '.restore-session'
 $script:NetworkTuningMaxManifestBytes = 1MB
 $script:NetworkTuningMaxRegistryBackupBytes = 1MB
 $script:NetworkTuningMaxCsvBackupBytes = 1MB
@@ -38,9 +46,7 @@ $script:NetworkTuningMaxBackupJsonDepth = 32
 $script:NetworkTuningDefaultDscp = 46
 
 # Windows power plan GUIDs
-$script:NetworkTuningPowerPlanGuidBalanced        = '381b4222-f694-41f0-9685-ff5bb260df2e'
 $script:NetworkTuningPowerPlanGuidHighPerformance = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
-$script:NetworkTuningPowerPlanGuidUltimate        = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
 
 # QoS naming ownership boundaries managed by this module.
 # Only these prefixes are treated as removable/restorable managed policies.
@@ -88,12 +94,6 @@ $script:NetworkTuningNicKeywordMap = @{
 # NIC keywords classified by evidence strength and impact tier.
 # Tier 1 (Safe): Zero-risk, no tradeoffs. Power-saving disables.
 $script:NetworkTuningNicKeywordsTier1 = @('*EEE', '*GreenEthernet', '*PowerSavingMode')
-
-# Tier 2 (Moderate): Proven with small documented tradeoffs (slightly higher CPU).
-$script:NetworkTuningNicKeywordsTier2 = @('*InterruptModeration', '*FlowControl')
-
-# Tier 3 (Aggressive): Maximum UDP optimization, measurable tradeoffs.
-$script:NetworkTuningNicKeywordsTier3 = @('*UDPChecksumOffloadIPv4', '*UDPChecksumOffloadIPv6', '*InterruptModerationRate')
 
 # Experimental: TCP-only, WoL/sleep-only, or unproven settings.
 # These have zero proven impact on UDP jitter during active use.

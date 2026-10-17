@@ -6,6 +6,7 @@ export interface Request {
   layers: Json[];
   strict: boolean;
   workflow?: string;
+  expected_operation_hash?: string;
 }
 
 export interface Progress {
@@ -385,7 +386,7 @@ export interface ReportPage {
 }
 
 export interface RunsPage {
-  runs: { path: string; summary?: Json; error?: unknown }[];
+  runs: { path: string; summary?: Json; status?: string; error?: unknown }[];
   total: number;
   has_more: boolean;
   legacy_index?: { path?: string; error?: unknown };

@@ -250,10 +250,17 @@ pub struct BasicRunResult {
     pub ping: Vec<Sample>,
     pub trace: Vec<HopResult>,
     pub path_statistics: Option<Vec<HopStatistics>>,
+    /// Result of the TCP stage; the field name is kept for compatibility, see `tcp_port`.
     pub tcp_443_ok: bool,
+    #[serde(default = "default_tcp_port")]
+    pub tcp_port: u16,
     pub failed_stages: Vec<String>,
     pub status: BasicRunStatus,
     pub stage_errors: Vec<BasicStageError>,
+}
+
+fn default_tcp_port() -> u16 {
+    443
 }
 
 pub async fn execute_item(
@@ -271,6 +278,7 @@ pub async fn execute_item(
     let mut trace_hops = Vec::new();
     let mut path_statistics = None;
     let mut tcp_443_ok = false;
+    let tcp_stage = format!("Tcp{}", settings.tcp_port);
     let mut failed_stages = Vec::new();
     let mut stage_errors = Vec::new();
     let mut cancelled = false;
@@ -357,7 +365,7 @@ pub async fn execute_item(
         {
             Ok(ok) => tcp_443_ok = ok,
             Err(error) => record_stage_error(
-                "Tcp443",
+                &tcp_stage,
                 error,
                 &mut failed_stages,
                 &mut stage_errors,
@@ -401,9 +409,9 @@ pub async fn execute_item(
                 &mut stage_errors,
             );
         }
-        if !tcp_443_ok && !failed_stages.iter().any(|stage| stage == "Tcp443") {
+        if !tcp_443_ok && !failed_stages.contains(&tcp_stage) {
             record_stage_outcome(
-                "Tcp443",
+                &tcp_stage,
                 "the TCP connection did not succeed",
                 &mut failed_stages,
                 &mut stage_errors,
@@ -426,6 +434,7 @@ pub async fn execute_item(
         trace: trace_hops,
         path_statistics,
         tcp_443_ok,
+        tcp_port: settings.tcp_port,
         failed_stages,
         status,
         stage_errors,

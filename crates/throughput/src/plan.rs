@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -121,6 +120,11 @@ fn validate(config: &SuiteConfig) -> Result<()> {
     {
         return Err(ThroughputError::Validation(
             "target must be a valid hostname or IP address up to 253 bytes".into(),
+        ));
+    }
+    if config.port == 0 {
+        return Err(ThroughputError::Validation(
+            "port must be between 1 and 65535".into(),
         ));
     }
     if !(1..=3600).contains(&config.duration_secs) {
@@ -385,50 +389,7 @@ pub struct TestResult {
     pub unavailable_metrics: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlanRun {
-    pub planned_tests: u64,
-    pub executed_tests: u64,
-    pub saturation_tests_skipped: u64,
-    pub results: Vec<TestResult>,
-}
-
 impl crate::Iperf3Client {
-    pub async fn run_plan(
-        &self,
-        plan: &ThroughputPlan,
-        cancellation: &CancellationToken,
-    ) -> Result<PlanRun> {
-        let mut results = Vec::new();
-        let mut saturated = HashSet::new();
-        let mut skipped = 0;
-        for spec in plan.tests() {
-            if spec.phase == TestPhase::UdpSaturation
-                && saturated.contains(&(spec.dscp, spec.direction))
-            {
-                skipped += 1;
-                continue;
-            }
-            let result = self
-                .run_test_with_retry(&spec, plan.config.retry, cancellation)
-                .await?;
-            if spec.phase == TestPhase::UdpSaturation
-                && result
-                    .loss_pct
-                    .is_some_and(|loss| loss >= plan.config.udp_loss_threshold_pct)
-            {
-                saturated.insert((spec.dscp, spec.direction));
-            }
-            results.push(result);
-        }
-        Ok(PlanRun {
-            planned_tests: plan.total_tests,
-            executed_tests: results.len() as u64,
-            saturation_tests_skipped: skipped,
-            results,
-        })
-    }
-
     pub(crate) async fn retry_backoff(
         cancellation: &CancellationToken,
         delay_ms: u64,
@@ -449,6 +410,18 @@ mod tests {
             target: "127.0.0.1".into(),
             ..SuiteConfig::default()
         }
+    }
+
+    #[test]
+    fn port_zero_is_rejected() {
+        let config = SuiteConfig {
+            port: 0,
+            ..defaults()
+        };
+        assert!(matches!(
+            plan(&config, ServerCapabilities::default()),
+            Err(ThroughputError::Validation(message)) if message.contains("port")
+        ));
     }
 
     #[test]

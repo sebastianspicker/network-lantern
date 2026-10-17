@@ -5,30 +5,39 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub(crate) fn system_resolver() -> Option<SocketAddr> {
+pub(crate) fn system_resolvers() -> Vec<SocketAddr> {
     #[cfg(unix)]
     {
-        let text = std::fs::read_to_string("/etc/resolv.conf").ok()?;
-        text.lines().find_map(|line| {
+        let Ok(text) = std::fs::read_to_string("/etc/resolv.conf") else {
+            return Vec::new();
+        };
+        parse_resolv_conf(&text)
+    }
+    #[cfg(windows)]
+    {
+        windows_system_resolvers()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Vec::new()
+    }
+}
+
+#[cfg(any(unix, test))]
+fn parse_resolv_conf(text: &str) -> Vec<SocketAddr> {
+    text.lines()
+        .filter_map(|line| {
             let mut fields = line.split_whitespace();
             (fields.next()? == "nameserver")
                 .then(|| fields.next()?.parse::<IpAddr>().ok())
                 .flatten()
                 .map(|ip| SocketAddr::new(ip, 53))
         })
-    }
-    #[cfg(windows)]
-    {
-        windows_system_resolver()
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        None
-    }
+        .collect()
 }
 
 #[cfg(windows)]
-fn windows_system_resolver() -> Option<SocketAddr> {
+fn windows_system_resolvers() -> Vec<SocketAddr> {
     use std::{ffi::CStr, mem::MaybeUninit, ptr};
     use windows_sys::Win32::{
         Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR},
@@ -38,13 +47,14 @@ fn windows_system_resolver() -> Option<SocketAddr> {
     let mut length = 0u32;
     let first = unsafe { GetNetworkParams(ptr::null_mut(), &mut length) };
     if first != ERROR_BUFFER_OVERFLOW || length < size_of::<FIXED_INFO_W2KSP1>() as u32 {
-        return None;
+        return Vec::new();
     }
     let mut storage = vec![MaybeUninit::<u8>::uninit(); length as usize];
     let info = storage.as_mut_ptr().cast::<FIXED_INFO_W2KSP1>();
     if unsafe { GetNetworkParams(info, &mut length) } != NO_ERROR {
-        return None;
+        return Vec::new();
     }
+    let mut resolvers = Vec::new();
     let mut server = unsafe { ptr::addr_of!((*info).DnsServerList) };
     while !server.is_null() {
         let text = unsafe { CStr::from_ptr((*server).IpAddress.String.as_ptr()) };
@@ -52,28 +62,50 @@ fn windows_system_resolver() -> Option<SocketAddr> {
             && let Ok(address) = value.parse::<IpAddr>()
             && !address.is_unspecified()
         {
-            return Some(SocketAddr::new(address, 53));
+            resolvers.push(SocketAddr::new(address, 53));
         }
         server = unsafe { (*server).Next };
     }
-    None
+    resolvers
+}
+
+/// Try each resolver in order; a timeout or I/O error falls through to the next.
+async fn query_any(
+    name: String,
+    query_type: u16,
+    resolvers: &[SocketAddr],
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> Result<Vec<String>, ProbeError> {
+    let mut last_error = None;
+    for resolver in resolvers {
+        match query(name.clone(), query_type, *resolver, timeout, cancellation).await {
+            Ok(records) => return Ok(records),
+            Err(ProbeError::Cancelled) => return Err(ProbeError::Cancelled),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| ProbeError::Io {
+        operation: "DNS query",
+        message: "no DNS resolver available".into(),
+    }))
 }
 
 pub(crate) async fn reverse_name(
     address: IpAddr,
-    resolver: SocketAddr,
+    resolvers: &[SocketAddr],
     timeout: Duration,
     cancellation: &CancellationToken,
 ) -> Result<Option<String>, ProbeError> {
     let name = reverse_pointer(address);
-    query(name, 12, resolver, timeout, cancellation)
+    query_any(name, 12, resolvers, timeout, cancellation)
         .await
         .map(|records| records.into_iter().next())
 }
 
 pub(crate) async fn lookup_asn(
     address: IpAddr,
-    resolver: SocketAddr,
+    resolvers: &[SocketAddr],
     timeout: Duration,
     cancellation: &CancellationToken,
 ) -> Result<Option<String>, ProbeError> {
@@ -102,7 +134,7 @@ pub(crate) async fn lookup_asn(
             )
         }
     };
-    query(name, 16, resolver, timeout, cancellation)
+    query_any(name, 16, resolvers, timeout, cancellation)
         .await
         .map(|records| {
             records.into_iter().next().and_then(|text| {
@@ -159,7 +191,7 @@ async fn query(
         outcome = tokio::time::timeout(timeout, socket.recv(&mut response)) => match outcome {
             Ok(Ok(received)) => received,
             Ok(Err(error)) => return Err(ProbeError::Io { operation: "receive DNS response", message: error.to_string() }),
-            Err(_) => return Ok(Vec::new()),
+            Err(_) => return Err(ProbeError::Io { operation: "receive DNS response", message: format!("timed out after {timeout:?} waiting for {resolver}") }),
         }
     };
     response.truncate(received);
@@ -318,6 +350,18 @@ fn dns_parse(message: &str) -> ProbeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resolv_conf_yields_every_nameserver_in_order() {
+        let text =
+            "# c\nsearch example\nnameserver 192.0.2.1\nnameserver 2001:db8::2\nnameserver bogus\n";
+        assert_eq!(
+            parse_resolv_conf(text),
+            [
+                "192.0.2.1:53".parse().unwrap(),
+                "[2001:db8::2]:53".parse().unwrap()
+            ]
+        );
+    }
     #[test]
     fn parses_recorded_txt_fixture_and_ptr_names() {
         let mut response = build_query(0x1234, "8.8.8.8.origin.asn.cymru.com", 16).unwrap();

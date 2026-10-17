@@ -2,9 +2,11 @@ use crate::{
     HopResult, HopStatistics, ProbeError, ProbeIdentity, RoundParameters, Sample, SampleStatus,
     Statistics,
 };
+#[cfg(not(windows))]
+use crate::{NativeAccess, TcpTraceMode};
 #[cfg(unix)]
 use lantern_packet::{
-    AddressFamily, IcmpKind, ProbeKey, TcpSynSpec, TransportProtocol, build_icmpv4_echo,
+    AddressFamily, IcmpKind, ParsedTcp, ProbeKey, TcpSynSpec, TransportProtocol, build_icmpv4_echo,
     build_icmpv6_echo, build_tcp_syn_ipv4, build_tcp_syn_ipv6, parse_icmp_response,
     parse_tcp_response,
 };
@@ -29,7 +31,7 @@ mod windows;
 #[cfg(windows)]
 use windows::probe_once;
 #[cfg(windows)]
-pub use windows::{tcp_trace_scoped, udp_trace_scoped};
+pub use windows::{native_access, tcp_trace_scoped, udp_trace_scoped};
 
 #[cfg(windows)]
 pub fn tcp_trace_probe_scoped(
@@ -368,8 +370,10 @@ where
         .collect())
 }
 
-/// Trace with kernel-generated UDP datagrams and a native raw ICMP response
-/// socket. The destination port identifies each quoted datagram.
+/// Trace with kernel-generated UDP datagrams. A raw (or, on BSD/macOS,
+/// datagram) ICMP socket observes the responses; unprivileged Linux reads them
+/// from the sender's `IP_RECVERR` error queue instead. The destination port
+/// identifies each quoted datagram.
 #[cfg(unix)]
 pub fn udp_trace(
     target: IpAddr,
@@ -419,7 +423,11 @@ pub fn udp_trace_scoped(
             message: error.to_string(),
         })?
         .port();
-    let listener = RawIcmpSocket::new(family, parameters.timeout.min(Duration::from_millis(100)))?;
+    let listener = udp_trace_listener(family, parameters.timeout.min(Duration::from_millis(100)))?;
+    #[cfg(target_os = "linux")]
+    if listener.is_none() {
+        enable_error_queue(sender.as_raw_fd(), family)?;
+    }
     let mut hops = Vec::new();
     for ttl in first_ttl..=parameters.max_hops {
         if cancellation.is_cancelled() {
@@ -427,6 +435,10 @@ pub fn udp_trace_scoped(
                 return Err(ProbeError::Cancelled);
             }
             break;
+        }
+        #[cfg(target_os = "linux")]
+        if listener.is_none() {
+            discard_error_queue(sender.as_raw_fd())?;
         }
         set_datagram_hop_limit(&sender, family, ttl)?;
         set_datagram_traffic_class(&sender, family, parameters.traffic_class)?;
@@ -437,13 +449,15 @@ pub fn udp_trace_scoped(
         destination.set_port(destination_port);
         let payload = vec![0x4c; parameters.payload_size];
         let started = Instant::now();
-        begin_probe(cancellation, || {
-            sender
-                .send_to(&payload, destination)
-                .map_err(|error| ProbeError::Io {
+        let outcome = begin_probe(cancellation, || {
+            match sender.send_to(&payload, destination) {
+                Ok(_) => Ok(SendOutcome::Sent),
+                Err(error) if is_route_error(&error) => Ok(SendOutcome::Unreachable),
+                Err(error) => Err(ProbeError::Io {
                     operation: "send UDP trace probe",
                     message: error.to_string(),
-                })
+                }),
+            }
         })?;
         let key = ProbeKey::ports(
             family,
@@ -451,53 +465,73 @@ pub fn udp_trace_scoped(
             source_port,
             destination_port,
         );
-        let mut observed = None;
+        let mut observed = (outcome == SendOutcome::Unreachable)
+            .then(|| (unreachable_sample(u16::from(ttl)), false));
         let mut cancelled = false;
-        while started.elapsed() < parameters.timeout {
+        let deadline = started + parameters.timeout;
+        while observed.is_none() && Instant::now() < deadline {
             if cancellation.is_cancelled() {
                 cancelled = true;
                 break;
             }
-            let received = listener.receive()?;
+            let mut fds = [match &listener {
+                Some(listener) => pollfd(listener.fd.as_raw_fd(), libc::POLLIN),
+                // Queued ICMP errors raise POLLERR without requesting events.
+                None => pollfd(sender.as_raw_fd(), 0),
+            }];
+            poll_sockets(&mut fds, deadline)?;
             if cancellation.is_cancelled() {
                 cancelled = true;
                 break;
             }
-            let Some((bytes, source)) = received else {
-                continue;
-            };
-            let Ok(mut response) = parse_icmp_response(&bytes, family) else {
-                continue;
-            };
-            if !response.correlates(&key) {
-                continue;
+            if let Some(listener) = &listener {
+                while let Some((bytes, source)) = listener.receive()? {
+                    let Ok(mut response) = parse_icmp_response(&bytes, family) else {
+                        continue;
+                    };
+                    if !response.correlates(&key) {
+                        continue;
+                    }
+                    if response.source.is_none() {
+                        response.source = source;
+                    }
+                    observed = Some(udp_trace_sample(
+                        ttl,
+                        target,
+                        response.kind,
+                        response.code,
+                        response.source,
+                        started,
+                        response.next_hop_mtu,
+                        response.mpls_labels,
+                    ));
+                    break;
+                }
             }
-            if response.source.is_none() {
-                response.source = source;
+            #[cfg(target_os = "linux")]
+            if listener.is_none() {
+                while let Some(queued) = receive_error_queue(sender.as_raw_fd())? {
+                    let Some(kind) = queued.kind() else {
+                        continue;
+                    };
+                    if !queued.destination.is_some_and(|quoted| {
+                        quoted.ip() == target.ip() && quoted.port() == destination_port
+                    }) {
+                        continue;
+                    }
+                    observed = Some(udp_trace_sample(
+                        ttl,
+                        target,
+                        kind,
+                        queued.code,
+                        queued.offender,
+                        started,
+                        queued.next_hop_mtu(),
+                        Vec::new(),
+                    ));
+                    break;
+                }
             }
-            let reached = response.kind == IcmpKind::DestinationUnreachable
-                && response.source == Some(target.ip())
-                && matches!(
-                    (family, response.code),
-                    (AddressFamily::Ipv4, 3) | (AddressFamily::Ipv6, 4)
-                );
-            let status = match response.kind {
-                IcmpKind::TimeExceeded => SampleStatus::TimeExceeded,
-                IcmpKind::DestinationUnreachable if reached => SampleStatus::Reply,
-                _ => SampleStatus::Unreachable,
-            };
-            observed = Some((
-                Sample {
-                    sequence: u16::from(ttl),
-                    hop: response.source,
-                    elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
-                    status,
-                    next_hop_mtu: response.next_hop_mtu,
-                    mpls: response.mpls_labels,
-                },
-                reached,
-            ));
-            break;
         }
         let (sample, reached_destination) = if cancelled {
             (cancelled_sample(u16::from(ttl)), false)
@@ -517,9 +551,64 @@ pub fn udp_trace_scoped(
     Ok(hops)
 }
 
-/// Trace with native raw TCP SYN packets. ICMP quotations identify intermediate
-/// hops; SYN-ACK or RST packets identify the destination without completing a
-/// TCP handshake.
+/// Build a UDP trace sample; port unreachable from the target is arrival.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn udp_trace_sample(
+    ttl: u8,
+    target: SocketAddr,
+    kind: IcmpKind,
+    code: u8,
+    hop: Option<IpAddr>,
+    started: Instant,
+    next_hop_mtu: Option<u32>,
+    mpls: Vec<lantern_packet::MplsLabel>,
+) -> (Sample, bool) {
+    let family = match target.ip() {
+        IpAddr::V4(_) => AddressFamily::Ipv4,
+        IpAddr::V6(_) => AddressFamily::Ipv6,
+    };
+    let reached = kind == IcmpKind::DestinationUnreachable
+        && hop == Some(target.ip())
+        && matches!(
+            (family, code),
+            (AddressFamily::Ipv4, 3) | (AddressFamily::Ipv6, 4)
+        );
+    let mut sample = icmp_sample(u16::from(ttl), kind, hop, started, next_hop_mtu, mpls);
+    if reached {
+        sample.status = SampleStatus::Reply;
+    }
+    (sample, reached)
+}
+
+/// The ICMP listener for UDP traces. Linux datagram ICMP sockets never see
+/// errors for other sockets, so unprivileged Linux uses the sender's error
+/// queue instead (`None`).
+#[cfg(target_os = "linux")]
+fn udp_trace_listener(
+    family: AddressFamily,
+    timeout: Duration,
+) -> Result<Option<RawIcmpSocket>, ProbeError> {
+    match RawIcmpSocket::new(family, timeout) {
+        Ok(socket) if socket.kind == SocketKind::Raw => Ok(Some(socket)),
+        Ok(_) | Err(ProbeError::Permission { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn udp_trace_listener(
+    family: AddressFamily,
+    timeout: Duration,
+) -> Result<Option<RawIcmpSocket>, ProbeError> {
+    RawIcmpSocket::new(family, timeout).map(Some)
+}
+
+/// Trace TCP. Linux with raw socket access sends hand-built SYN packets and
+/// observes SYN-ACK or RST without completing a handshake. macOS/BSD (whose
+/// kernels never deliver TCP segments to raw sockets) and unprivileged Linux
+/// use one kernel `connect()` per probe instead: the destination then sees a
+/// completed handshake immediately followed by RST.
 #[cfg(unix)]
 pub fn tcp_trace(
     target: IpAddr,
@@ -537,6 +626,7 @@ pub fn tcp_trace(
     )
 }
 
+/// See [`tcp_trace`] for the raw and connect modes.
 #[cfg(unix)]
 pub fn tcp_trace_scoped(
     target: SocketAddr,
@@ -554,142 +644,29 @@ pub fn tcp_trace_scoped(
         IpAddr::V4(_) => AddressFamily::Ipv4,
         IpAddr::V6(_) => AddressFamily::Ipv6,
     };
-    let source = source_for(target)?;
-    let source_port = 49_152u16.wrapping_add(rand::random::<u16>() % 16_383);
-    let sender = RawIpSocket::new(family)?;
-    let icmp_listener =
-        RawIcmpSocket::new(family, parameters.timeout.min(Duration::from_millis(50)))?;
-    let tcp_listener = RawIcmpSocket::new_protocol(
-        family,
-        libc::IPPROTO_TCP,
-        parameters.timeout.min(Duration::from_millis(50)),
-    )?;
-    let mut hops = Vec::new();
-    for ttl in first_ttl..=parameters.max_hops {
-        if cancellation.is_cancelled() {
-            if hops.is_empty() {
-                return Err(ProbeError::Cancelled);
-            }
-            break;
-        }
-        let sequence = rand::random::<u32>();
-        let spec = TcpSynSpec {
-            source_port,
+    match raw_tcp_sender(family)? {
+        Some(sender) => tcp_trace_raw(
+            target,
+            first_ttl,
+            parameters,
             destination_port,
-            sequence,
-            hop_limit: ttl,
-            traffic_class: parameters.traffic_class.unwrap_or(0),
-            dont_fragment: parameters.dont_fragment,
-        };
-        let packet = match (source, target.ip()) {
-            (IpAddr::V4(source), IpAddr::V4(destination)) => {
-                build_tcp_syn_ipv4(source, destination, &spec)
-            }
-            (IpAddr::V6(source), IpAddr::V6(destination)) => {
-                build_tcp_syn_ipv6(source, destination, &spec)
-            }
-            _ => {
-                return Err(ProbeError::Io {
-                    operation: "build TCP trace probe",
-                    message: "source and destination families differ".into(),
-                });
-            }
-        };
-        let started = Instant::now();
-        begin_probe(cancellation, || sender.send_to(&packet, target))?;
-        let key = ProbeKey::tcp(family, source_port, destination_port, Some(sequence));
-        let mut observed = None;
-        let mut cancelled = false;
-        while started.elapsed() < parameters.timeout {
-            if cancellation.is_cancelled() {
-                cancelled = true;
-                break;
-            }
-            let icmp_packet = icmp_listener.receive()?;
-            if cancellation.is_cancelled() {
-                cancelled = true;
-                break;
-            }
-            if let Some((bytes, source_address)) = icmp_packet
-                && let Ok(mut response) = parse_icmp_response(&bytes, family)
-                && response.correlates(&key)
-            {
-                if response.source.is_none() {
-                    response.source = source_address;
-                }
-                let status = if response.kind == IcmpKind::TimeExceeded {
-                    SampleStatus::TimeExceeded
-                } else {
-                    SampleStatus::Unreachable
-                };
-                observed = Some((
-                    Sample {
-                        sequence: ttl.into(),
-                        hop: response.source,
-                        elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
-                        status,
-                        next_hop_mtu: response.next_hop_mtu,
-                        mpls: response.mpls_labels,
-                    },
-                    false,
-                ));
-            }
-            if observed.is_some() {
-                break;
-            }
-            let tcp_packet = tcp_listener.receive()?;
-            if cancellation.is_cancelled() {
-                cancelled = true;
-                break;
-            }
-            if let Some((bytes, source_address)) = tcp_packet
-                && let Ok(mut response) = parse_tcp_response(&bytes, family)
-            {
-                if response.source.is_none() {
-                    response.source = source_address;
-                }
-                if response.source_port == destination_port
-                    && response.destination_port == source_port
-                    && (response.rst
-                        || (response.syn
-                            && response.ack
-                            && response.acknowledgment == sequence.wrapping_add(1)))
-                {
-                    observed = Some((
-                        Sample {
-                            sequence: ttl.into(),
-                            hop: response.source,
-                            elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
-                            status: SampleStatus::Reply,
-                            next_hop_mtu: None,
-                            mpls: Vec::new(),
-                        },
-                        true,
-                    ));
-                }
-            }
-            if observed.is_some() {
-                break;
-            }
-        }
-        let (sample, reached_destination) = if cancelled {
-            (cancelled_sample(ttl.into()), false)
-        } else {
-            observed.unwrap_or_else(|| (timeout_sample(ttl.into()), false))
-        };
-        hops.push(HopResult {
-            ttl,
-            address: sample.hop,
-            reached_destination,
-            samples: vec![sample],
-        });
-        if reached_destination || cancelled {
-            break;
+            &sender,
+            cancellation,
+        ),
+        None => {
+            log_connect_mode();
+            tcp_trace_connect(
+                target,
+                first_ttl,
+                parameters,
+                destination_port,
+                cancellation,
+            )
         }
     }
-    Ok(hops)
 }
 
+/// See [`tcp_trace`] for the raw and connect modes.
 #[cfg(unix)]
 pub fn tcp_trace_probe_scoped(
     target: SocketAddr,
@@ -708,6 +685,372 @@ pub fn tcp_trace_probe_scoped(
         IpAddr::V4(_) => AddressFamily::Ipv4,
         IpAddr::V6(_) => AddressFamily::Ipv6,
     };
+    let sample = match raw_tcp_sender(family)? {
+        Some(sender) => tcp_trace_probe_raw(
+            target,
+            ttl,
+            parameters,
+            destination_port,
+            identity,
+            &sender,
+            cancellation,
+        )?,
+        None => {
+            log_connect_mode();
+            let listener = connect_icmp_listener(family, parameters.timeout)?;
+            tcp_connect_probe(
+                target,
+                ttl,
+                parameters,
+                destination_port,
+                listener.as_ref(),
+                cancellation,
+            )?
+        }
+    };
+    Ok(HopResult {
+        ttl,
+        address: sample.hop,
+        reached_destination: sample.status == SampleStatus::Reply,
+        samples: vec![sample],
+    })
+}
+
+#[cfg(unix)]
+fn log_connect_mode() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| log::info!("TCP trace uses connect() probes"));
+}
+
+/// The raw IP sender for raw TCP traces, or `None` for connect mode.
+#[cfg(target_os = "linux")]
+fn raw_tcp_sender(family: AddressFamily) -> Result<Option<RawIpSocket>, ProbeError> {
+    match RawIpSocket::new(family) {
+        Ok(sender) => Ok(Some(sender)),
+        Err(ProbeError::Permission { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// BSD/macOS kernels never deliver TCP segments to raw sockets, so a raw SYN
+/// trace cannot observe the destination; connect mode is always used.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn raw_tcp_sender(_family: AddressFamily) -> Result<Option<RawIpSocket>, ProbeError> {
+    Ok(None)
+}
+
+/// The ICMP listener for connect-mode TCP probes. Linux reads the TCP socket's
+/// own error queue instead (`None`).
+#[cfg(target_os = "linux")]
+fn connect_icmp_listener(
+    _family: AddressFamily,
+    _timeout: Duration,
+) -> Result<Option<RawIcmpSocket>, ProbeError> {
+    Ok(None)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn connect_icmp_listener(
+    family: AddressFamily,
+    timeout: Duration,
+) -> Result<Option<RawIcmpSocket>, ProbeError> {
+    RawIcmpSocket::new(family, timeout.min(Duration::from_millis(50))).map(Some)
+}
+
+#[cfg(unix)]
+fn tcp_trace_connect(
+    target: SocketAddr,
+    first_ttl: u8,
+    parameters: &RoundParameters,
+    destination_port: u16,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<Vec<HopResult>, ProbeError> {
+    let family = match target.ip() {
+        IpAddr::V4(_) => AddressFamily::Ipv4,
+        IpAddr::V6(_) => AddressFamily::Ipv6,
+    };
+    let listener = connect_icmp_listener(family, parameters.timeout)?;
+    let mut hops = Vec::new();
+    for ttl in first_ttl..=parameters.max_hops {
+        if cancellation.is_cancelled() {
+            if hops.is_empty() {
+                return Err(ProbeError::Cancelled);
+            }
+            break;
+        }
+        let sample = tcp_connect_probe(
+            target,
+            ttl,
+            parameters,
+            destination_port,
+            listener.as_ref(),
+            cancellation,
+        )?;
+        let reached_destination = sample.status == SampleStatus::Reply;
+        let cancelled = sample.status == SampleStatus::Cancelled;
+        hops.push(HopResult {
+            ttl,
+            address: sample.hop,
+            reached_destination,
+            samples: vec![sample],
+        });
+        if reached_destination || cancelled {
+            break;
+        }
+    }
+    Ok(hops)
+}
+
+/// One connect-mode TCP probe. SYN-ACK (connection established) or RST
+/// (connection refused) mark the destination; closing with a zero linger
+/// timeout then sends RST, so the destination sees a completed handshake
+/// followed by RST. ICMP errors quoting the probe's ports identify routers.
+#[cfg(unix)]
+fn tcp_connect_probe(
+    target: SocketAddr,
+    ttl: u8,
+    parameters: &RoundParameters,
+    destination_port: u16,
+    icmp_listener: Option<&RawIcmpSocket>,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<Sample, ProbeError> {
+    let sequence = u16::from(ttl);
+    let (family, domain, hop_option, class_option) = match target.ip() {
+        IpAddr::V4(_) => (
+            AddressFamily::Ipv4,
+            libc::AF_INET,
+            (libc::IPPROTO_IP, libc::IP_TTL),
+            (libc::IPPROTO_IP, libc::IP_TOS),
+        ),
+        IpAddr::V6(_) => (
+            AddressFamily::Ipv6,
+            libc::AF_INET6,
+            (libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS),
+            (libc::IPPROTO_IPV6, libc::IPV6_TCLASS),
+        ),
+    };
+    let socket = open_socket(
+        domain,
+        libc::SOCK_STREAM,
+        libc::IPPROTO_TCP,
+        "open TCP trace socket",
+    )?;
+    let fd = socket.as_raw_fd();
+    set_nonblocking(fd)?;
+    let hops = libc::c_int::from(ttl);
+    set_option(
+        fd,
+        hop_option.0,
+        hop_option.1,
+        &hops,
+        "set TCP probe hop limit",
+    )?;
+    if let Some(traffic_class) = parameters.traffic_class {
+        let value = libc::c_int::from(traffic_class);
+        set_option(
+            fd,
+            class_option.0,
+            class_option.1,
+            &value,
+            "set TCP probe traffic class",
+        )?;
+    }
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    set_option(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_LINGER,
+        &linger,
+        "set TCP probe linger",
+    )?;
+    #[cfg(target_os = "linux")]
+    if icmp_listener.is_none() {
+        enable_error_queue(fd, family)?;
+    }
+    let mut destination = target;
+    destination.set_port(destination_port);
+    let (storage, length) = socket_address_with_port(destination);
+    let started = Instant::now();
+    let connected = begin_probe(cancellation, || {
+        let status = unsafe { libc::connect(fd, (&raw const storage).cast(), length) };
+        Ok(if status == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        })
+    })?;
+    match connected {
+        Ok(()) => return Ok(reply_sample(sequence, target.ip(), started)),
+        Err(error) => match error.raw_os_error() {
+            // An interrupted connect continues asynchronously.
+            Some(libc::EINPROGRESS | libc::EINTR) => {}
+            Some(libc::ECONNREFUSED) => return Ok(reply_sample(sequence, target.ip(), started)),
+            _ if is_route_error(&error) => return Ok(unreachable_sample(sequence)),
+            _ => return Err(socket_error("start TCP trace connection", error)),
+        },
+    }
+    let source_port = local_port(fd, "read TCP trace source port")?;
+    let key = ProbeKey::ports(
+        family,
+        TransportProtocol::Tcp,
+        source_port,
+        destination_port,
+    );
+    let deadline = started + parameters.timeout;
+    loop {
+        if cancellation.is_cancelled() {
+            return Ok(cancelled_sample(sequence));
+        }
+        if Instant::now() >= deadline {
+            return Ok(timeout_sample(sequence));
+        }
+        let mut fds = [
+            pollfd(fd, libc::POLLOUT),
+            pollfd(
+                icmp_listener.map_or(-1, |listener| listener.fd.as_raw_fd()),
+                libc::POLLIN,
+            ),
+        ];
+        poll_sockets(&mut fds, deadline)?;
+        if cancellation.is_cancelled() {
+            return Ok(cancelled_sample(sequence));
+        }
+        if let Some(listener) = icmp_listener {
+            while let Some((bytes, source)) = listener.receive()? {
+                if let Ok(mut response) = parse_icmp_response(&bytes, family)
+                    && response.correlates(&key)
+                {
+                    if response.source.is_none() {
+                        response.source = source;
+                    }
+                    return Ok(icmp_sample(
+                        sequence,
+                        response.kind,
+                        response.source,
+                        started,
+                        response.next_hop_mtu,
+                        response.mpls_labels,
+                    ));
+                }
+            }
+        }
+        if fds[0].revents & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) == 0 {
+            continue;
+        }
+        #[cfg(target_os = "linux")]
+        while let Some(queued) = receive_error_queue(fd)? {
+            if let Some(kind) = queued.kind() {
+                return Ok(icmp_sample(
+                    sequence,
+                    kind,
+                    queued.offender,
+                    started,
+                    queued.next_hop_mtu(),
+                    Vec::new(),
+                ));
+            }
+        }
+        match pending_socket_error(fd)? {
+            0 | libc::ECONNREFUSED => return Ok(reply_sample(sequence, target.ip(), started)),
+            code => {
+                let error = io::Error::from_raw_os_error(code);
+                if is_route_error(&error) {
+                    return Ok(unreachable_sample(sequence));
+                }
+                return Err(socket_error("complete TCP trace connection", error));
+            }
+        }
+    }
+}
+
+/// Raw SYN trace (Linux with raw socket access). ICMP quotations identify
+/// intermediate hops; SYN-ACK or RST packets identify the destination without
+/// completing a TCP handshake.
+#[cfg(unix)]
+fn tcp_trace_raw(
+    target: SocketAddr,
+    first_ttl: u8,
+    parameters: &RoundParameters,
+    destination_port: u16,
+    sender: &RawIpSocket,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<Vec<HopResult>, ProbeError> {
+    let family = match target.ip() {
+        IpAddr::V4(_) => AddressFamily::Ipv4,
+        IpAddr::V6(_) => AddressFamily::Ipv6,
+    };
+    let source = source_for(target)?;
+    let source_port = 49_152u16.wrapping_add(rand::random::<u16>() % 16_383);
+    let listeners = RawTcpListeners::new(family, parameters.timeout)?;
+    let mut hops = Vec::new();
+    for ttl in first_ttl..=parameters.max_hops {
+        if cancellation.is_cancelled() {
+            if hops.is_empty() {
+                return Err(ProbeError::Cancelled);
+            }
+            break;
+        }
+        let sequence = rand::random::<u32>();
+        let spec = TcpSynSpec {
+            source_port,
+            destination_port,
+            sequence,
+            hop_limit: ttl,
+            traffic_class: parameters.traffic_class.unwrap_or(0),
+            dont_fragment: parameters.dont_fragment,
+        };
+        let packet = build_raw_syn(source, target.ip(), &spec)?;
+        let started = Instant::now();
+        let sample = match begin_probe(cancellation, || sender.send_to(&packet, target))? {
+            SendOutcome::Unreachable => unreachable_sample(ttl.into()),
+            SendOutcome::Sent => listeners.wait(
+                ttl,
+                &ProbeKey::tcp(family, source_port, destination_port, Some(sequence)),
+                started + parameters.timeout,
+                started,
+                |response| {
+                    response.source_port == destination_port
+                        && response.destination_port == source_port
+                        && (response.rst
+                            || (response.syn
+                                && response.ack
+                                && response.acknowledgment == sequence.wrapping_add(1)))
+                },
+                cancellation,
+            )?,
+        };
+        let reached_destination = sample.status == SampleStatus::Reply;
+        let cancelled = sample.status == SampleStatus::Cancelled;
+        hops.push(HopResult {
+            ttl,
+            address: sample.hop,
+            reached_destination,
+            samples: vec![sample],
+        });
+        if reached_destination || cancelled {
+            break;
+        }
+    }
+    Ok(hops)
+}
+
+#[cfg(unix)]
+fn tcp_trace_probe_raw(
+    target: SocketAddr,
+    ttl: u8,
+    parameters: &RoundParameters,
+    destination_port: u16,
+    identity: ProbeIdentity,
+    sender: &RawIpSocket,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<Sample, ProbeError> {
+    let family = match target.ip() {
+        IpAddr::V4(_) => AddressFamily::Ipv4,
+        IpAddr::V6(_) => AddressFamily::Ipv6,
+    };
     let source = source_for(target)?;
     let source_port = 49_152 + (identity.ordinal % 16_383) as u16;
     let sequence = identity.nonce.rotate_left(identity.ordinal % 31) ^ identity.ordinal;
@@ -719,123 +1062,127 @@ pub fn tcp_trace_probe_scoped(
         traffic_class: parameters.traffic_class.unwrap_or(0),
         dont_fragment: parameters.dont_fragment,
     };
-    let packet = match (source, target.ip()) {
-        (IpAddr::V4(source), IpAddr::V4(destination)) => {
-            build_tcp_syn_ipv4(source, destination, &spec)
-        }
-        (IpAddr::V6(source), IpAddr::V6(destination)) => {
-            build_tcp_syn_ipv6(source, destination, &spec)
-        }
-        _ => {
-            return Err(ProbeError::Io {
-                operation: "build TCP trace probe",
-                message: "source and destination families differ".into(),
-            });
-        }
-    };
-    let sender = RawIpSocket::new(family)?;
-    let icmp_listener =
-        RawIcmpSocket::new(family, parameters.timeout.min(Duration::from_millis(50)))?;
-    let tcp_listener = RawIcmpSocket::new_protocol(
-        family,
-        libc::IPPROTO_TCP,
-        parameters.timeout.min(Duration::from_millis(50)),
-    )?;
+    let packet = build_raw_syn(source, target.ip(), &spec)?;
+    let listeners = RawTcpListeners::new(family, parameters.timeout)?;
     let started = Instant::now();
-    begin_probe(cancellation, || sender.send_to(&packet, target))?;
-    let key = ProbeKey::tcp(family, source_port, destination_port, Some(sequence));
-    while started.elapsed() < parameters.timeout {
-        if cancellation.is_cancelled() {
-            let sample = cancelled_sample(ttl.into());
-            return Ok(HopResult {
-                ttl,
-                address: None,
-                reached_destination: false,
-                samples: vec![sample],
-            });
-        }
-        let icmp_packet = icmp_listener.receive()?;
-        if cancellation.is_cancelled() {
-            let sample = cancelled_sample(ttl.into());
-            return Ok(HopResult {
-                ttl,
-                address: None,
-                reached_destination: false,
-                samples: vec![sample],
-            });
-        }
-        if let Some((bytes, source_address)) = icmp_packet
-            && let Ok(mut response) = parse_icmp_response(&bytes, family)
-            && response.correlates(&key)
-        {
-            if response.source.is_none() {
-                response.source = source_address;
-            }
-            let sample = Sample {
-                sequence: ttl.into(),
-                hop: response.source,
-                elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
-                status: if response.kind == IcmpKind::TimeExceeded {
-                    SampleStatus::TimeExceeded
-                } else {
-                    SampleStatus::Unreachable
-                },
-                next_hop_mtu: response.next_hop_mtu,
-                mpls: response.mpls_labels,
-            };
-            return Ok(HopResult {
-                ttl,
-                address: sample.hop,
-                reached_destination: false,
-                samples: vec![sample],
-            });
-        }
-        let tcp_packet = tcp_listener.receive()?;
-        if cancellation.is_cancelled() {
-            let sample = cancelled_sample(ttl.into());
-            return Ok(HopResult {
-                ttl,
-                address: None,
-                reached_destination: false,
-                samples: vec![sample],
-            });
-        }
-        if let Some((bytes, source_address)) = tcp_packet
-            && let Ok(mut response) = parse_tcp_response(&bytes, family)
-        {
-            if response.source.is_none() {
-                response.source = source_address;
-            }
-            if response.source_port == destination_port
+    if begin_probe(cancellation, || sender.send_to(&packet, target))? == SendOutcome::Unreachable {
+        return Ok(unreachable_sample(ttl.into()));
+    }
+    listeners.wait(
+        ttl,
+        &ProbeKey::tcp(family, source_port, destination_port, Some(sequence)),
+        started + parameters.timeout,
+        started,
+        |response| {
+            response.source_port == destination_port
                 && response.destination_port == source_port
                 && response.ack
                 && response.acknowledgment == sequence.wrapping_add(1)
                 && (response.rst || response.syn)
-            {
-                let sample = Sample {
-                    sequence: ttl.into(),
-                    hop: response.source,
-                    elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
-                    status: SampleStatus::Reply,
-                    next_hop_mtu: None,
-                    mpls: Vec::new(),
-                };
-                return Ok(HopResult {
-                    ttl,
-                    address: sample.hop,
-                    reached_destination: true,
-                    samples: vec![sample],
-                });
+        },
+        cancellation,
+    )
+}
+
+#[cfg(unix)]
+fn build_raw_syn(
+    source: IpAddr,
+    destination: IpAddr,
+    spec: &TcpSynSpec,
+) -> Result<Vec<u8>, ProbeError> {
+    match (source, destination) {
+        (IpAddr::V4(source), IpAddr::V4(destination)) => {
+            Ok(build_tcp_syn_ipv4(source, destination, spec))
+        }
+        (IpAddr::V6(source), IpAddr::V6(destination)) => {
+            Ok(build_tcp_syn_ipv6(source, destination, spec))
+        }
+        _ => Err(ProbeError::Io {
+            operation: "build TCP trace probe",
+            message: "source and destination families differ".into(),
+        }),
+    }
+}
+
+/// Raw ICMP and TCP listeners for a raw SYN probe, polled together so that
+/// neither read delays the other.
+#[cfg(unix)]
+struct RawTcpListeners {
+    icmp: RawIcmpSocket,
+    tcp: RawIcmpSocket,
+}
+
+#[cfg(unix)]
+impl RawTcpListeners {
+    fn new(family: AddressFamily, timeout: Duration) -> Result<Self, ProbeError> {
+        let timeout = timeout.min(Duration::from_millis(50));
+        Ok(Self {
+            icmp: RawIcmpSocket::new(family, timeout)?,
+            tcp: RawIcmpSocket::new_protocol(family, libc::IPPROTO_TCP, timeout)?,
+        })
+    }
+
+    fn wait(
+        &self,
+        ttl: u8,
+        key: &ProbeKey,
+        deadline: Instant,
+        started: Instant,
+        accept: impl Fn(&ParsedTcp) -> bool,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<Sample, ProbeError> {
+        let sequence = u16::from(ttl);
+        loop {
+            if cancellation.is_cancelled() {
+                return Ok(cancelled_sample(sequence));
+            }
+            if Instant::now() >= deadline {
+                return Ok(timeout_sample(sequence));
+            }
+            let mut fds = [
+                pollfd(self.icmp.fd.as_raw_fd(), libc::POLLIN),
+                pollfd(self.tcp.fd.as_raw_fd(), libc::POLLIN),
+            ];
+            poll_sockets(&mut fds, deadline)?;
+            if cancellation.is_cancelled() {
+                return Ok(cancelled_sample(sequence));
+            }
+            while let Some((bytes, source)) = self.icmp.receive()? {
+                if let Ok(mut response) = parse_icmp_response(&bytes, key.family)
+                    && response.correlates(key)
+                {
+                    if response.source.is_none() {
+                        response.source = source;
+                    }
+                    return Ok(icmp_sample(
+                        sequence,
+                        response.kind,
+                        response.source,
+                        started,
+                        response.next_hop_mtu,
+                        response.mpls_labels,
+                    ));
+                }
+            }
+            while let Some((bytes, source)) = self.tcp.receive()? {
+                if let Ok(mut response) = parse_tcp_response(&bytes, key.family) {
+                    if response.source.is_none() {
+                        response.source = source;
+                    }
+                    if accept(&response) {
+                        return Ok(Sample {
+                            sequence,
+                            hop: response.source,
+                            elapsed_ms: Some(elapsed_ms(started)),
+                            status: SampleStatus::Reply,
+                            next_hop_mtu: None,
+                            mpls: Vec::new(),
+                        });
+                    }
+                }
             }
         }
     }
-    let sample = timeout_sample(ttl.into());
-    Ok(HopResult {
-        ttl,
-        address: None,
-        reached_destination: false,
-        samples: vec![sample],
-    })
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -879,6 +1226,46 @@ pub fn tcp_trace_probe_scoped(
         operation: "TCP trace probe",
         message: "the current native socket backend supports Unix and Windows targets".into(),
     })
+}
+
+/// Report which native sockets this process may open. Each socket is opened and
+/// immediately closed; no packet is sent.
+#[cfg(unix)]
+pub fn native_access() -> NativeAccess {
+    let opens = |domain, kind, protocol| {
+        open_socket(domain, kind, protocol, "check native socket access").is_ok()
+    };
+    let raw_ip_sender = RawIpSocket::new(AddressFamily::Ipv4).is_ok();
+    NativeAccess {
+        raw_icmpv4: opens(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP),
+        raw_icmpv6: opens(libc::AF_INET6, libc::SOCK_RAW, libc::IPPROTO_ICMPV6),
+        datagram_icmpv4: opens(libc::AF_INET, libc::SOCK_DGRAM, libc::IPPROTO_ICMP),
+        datagram_icmpv6: opens(libc::AF_INET6, libc::SOCK_DGRAM, libc::IPPROTO_ICMPV6),
+        raw_ip_sender,
+        tcp_trace_mode: if cfg!(target_os = "linux") && raw_ip_sender {
+            TcpTraceMode::Raw
+        } else {
+            TcpTraceMode::Connect
+        },
+        elevated: None,
+        windows_tcp_intermediate_hops: None,
+        traffic_class_supported: true,
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+pub fn native_access() -> NativeAccess {
+    NativeAccess {
+        raw_icmpv4: false,
+        raw_icmpv6: false,
+        datagram_icmpv4: false,
+        datagram_icmpv6: false,
+        raw_ip_sender: false,
+        tcp_trace_mode: TcpTraceMode::Connect,
+        elevated: None,
+        windows_tcp_intermediate_hops: None,
+        traffic_class_supported: false,
+    }
 }
 
 #[cfg(unix)]
@@ -938,6 +1325,7 @@ fn probe_once(
         IpAddr::V6(_) => AddressFamily::Ipv6,
     };
     let socket = RawIcmpSocket::new(family, parameters.timeout.min(Duration::from_millis(100)))?;
+    let identifier = socket.prepare_echo(family, identifier)?;
     if let Some(ttl) = ttl {
         socket.set_hop_limit(family, ttl)?;
     }
@@ -954,47 +1342,60 @@ fn probe_once(
         }
     };
     let started = Instant::now();
-    begin_probe(cancellation, || socket.send_to(&packet, target))?;
+    if begin_probe(cancellation, || socket.send_to(&packet, target))? == SendOutcome::Unreachable {
+        return Ok(unreachable_sample(sequence));
+    }
     let expected = ProbeKey::icmp(family, identifier, sequence);
+    let deadline = started + parameters.timeout;
     loop {
         if cancellation.is_cancelled() {
             return Ok(cancelled_sample(sequence));
         }
-        if started.elapsed() >= parameters.timeout {
+        if Instant::now() >= deadline {
             return Ok(timeout_sample(sequence));
         }
-        let received = socket.receive()?;
+        poll_sockets(&mut [pollfd(socket.fd.as_raw_fd(), libc::POLLIN)], deadline)?;
         if cancellation.is_cancelled() {
             return Ok(cancelled_sample(sequence));
         }
-        let Some((bytes, source)) = received else {
-            continue;
-        };
-        let Ok(mut response) = parse_icmp_response(&bytes, family) else {
-            continue;
-        };
-        if !response.correlates(&expected) {
-            continue;
+        // Linux ping sockets report ICMP errors only through the error queue,
+        // which is read first because a pending error also fails a normal read.
+        #[cfg(target_os = "linux")]
+        if socket.kind == SocketKind::Datagram {
+            while let Some(queued) = receive_error_queue(socket.fd.as_raw_fd())? {
+                if let Some(kind) = queued.kind()
+                    && quoted_echo_sequence(&queued.payload, family) == Some(sequence)
+                {
+                    return Ok(icmp_sample(
+                        sequence,
+                        kind,
+                        queued.offender,
+                        started,
+                        queued.next_hop_mtu(),
+                        Vec::new(),
+                    ));
+                }
+            }
         }
-        if response.source.is_none() {
-            response.source = source;
+        while let Some((bytes, source)) = socket.receive()? {
+            let Ok(mut response) = parse_icmp_response(&bytes, family) else {
+                continue;
+            };
+            if !response.correlates(&expected) {
+                continue;
+            }
+            if response.source.is_none() {
+                response.source = source;
+            }
+            return Ok(icmp_sample(
+                sequence,
+                response.kind,
+                response.source,
+                started,
+                response.next_hop_mtu,
+                response.mpls_labels,
+            ));
         }
-        let status = match response.kind {
-            IcmpKind::EchoReply => SampleStatus::Reply,
-            IcmpKind::TimeExceeded => SampleStatus::TimeExceeded,
-            IcmpKind::DestinationUnreachable
-            | IcmpKind::PacketTooBig
-            | IcmpKind::ParameterProblem
-            | IcmpKind::Other => SampleStatus::Unreachable,
-        };
-        return Ok(Sample {
-            sequence,
-            hop: response.source,
-            elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
-            status,
-            next_hop_mtu: response.next_hop_mtu,
-            mpls: response.mpls_labels,
-        });
     }
 }
 
@@ -1035,6 +1436,63 @@ fn cancelled_sample(sequence: u16) -> Sample {
     }
 }
 
+/// The kernel had no route for the probe and no router identified itself.
+#[cfg(unix)]
+fn unreachable_sample(sequence: u16) -> Sample {
+    Sample {
+        sequence,
+        hop: None,
+        elapsed_ms: None,
+        status: SampleStatus::Unreachable,
+        next_hop_mtu: None,
+        mpls: Vec::new(),
+    }
+}
+
+#[cfg(unix)]
+fn reply_sample(sequence: u16, target: IpAddr, started: Instant) -> Sample {
+    Sample {
+        sequence,
+        hop: Some(target),
+        elapsed_ms: Some(elapsed_ms(started)),
+        status: SampleStatus::Reply,
+        next_hop_mtu: None,
+        mpls: Vec::new(),
+    }
+}
+
+#[cfg(unix)]
+fn icmp_sample(
+    sequence: u16,
+    kind: IcmpKind,
+    hop: Option<IpAddr>,
+    started: Instant,
+    next_hop_mtu: Option<u32>,
+    mpls: Vec<lantern_packet::MplsLabel>,
+) -> Sample {
+    let status = match kind {
+        IcmpKind::EchoReply => SampleStatus::Reply,
+        IcmpKind::TimeExceeded => SampleStatus::TimeExceeded,
+        IcmpKind::DestinationUnreachable
+        | IcmpKind::PacketTooBig
+        | IcmpKind::ParameterProblem
+        | IcmpKind::Other => SampleStatus::Unreachable,
+    };
+    Sample {
+        sequence,
+        hop,
+        elapsed_ms: Some(elapsed_ms(started)),
+        status,
+        next_hop_mtu,
+        mpls,
+    }
+}
+
+#[cfg(unix)]
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
 fn begin_probe<T>(
     cancellation: &tokio_util::sync::CancellationToken,
     send: impl FnOnce() -> Result<T, ProbeError>,
@@ -1045,9 +1503,162 @@ fn begin_probe<T>(
     send()
 }
 
+/// Outcome of handing one probe to the kernel.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendOutcome {
+    Sent,
+    /// The kernel refused the send because no route reaches the target.
+    Unreachable,
+}
+
+#[cfg(unix)]
+fn is_route_error(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ENETUNREACH | libc::EHOSTUNREACH | libc::EHOSTDOWN)
+    )
+}
+
+#[cfg(unix)]
+fn send_outcome(
+    operation: &'static str,
+    sent: isize,
+    expected: usize,
+) -> Result<SendOutcome, ProbeError> {
+    if sent < 0 {
+        let error = io::Error::last_os_error();
+        if is_route_error(&error) {
+            return Ok(SendOutcome::Unreachable);
+        }
+        return Err(socket_error(operation, error));
+    }
+    if sent as usize != expected {
+        return Err(ProbeError::Io {
+            operation,
+            message: format!("short write: sent {sent} of {expected} bytes"),
+        });
+    }
+    Ok(SendOutcome::Sent)
+}
+
+/// How long one `poll()` may block before cancellation is checked again.
+#[cfg(unix)]
+const POLL_SLICE: Duration = Duration::from_millis(25);
+
+#[cfg(unix)]
+fn pollfd(fd: libc::c_int, events: libc::c_short) -> libc::pollfd {
+    libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    }
+}
+
+/// Wait until a socket is ready, the deadline passes, or one poll slice ends.
+/// An interrupted wait returns early so the caller re-checks its state.
+#[cfg(unix)]
+fn poll_sockets(fds: &mut [libc::pollfd], deadline: Instant) -> Result<(), ProbeError> {
+    for entry in fds.iter_mut() {
+        entry.revents = 0;
+    }
+    let wait = deadline
+        .saturating_duration_since(Instant::now())
+        .min(POLL_SLICE);
+    let millis = wait.as_micros().div_ceil(1000) as libc::c_int;
+    let status = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
+    if status < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            return Ok(());
+        }
+        return Err(socket_error("wait for probe response", error));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_socket(
+    domain: libc::c_int,
+    kind: libc::c_int,
+    protocol: libc::c_int,
+    operation: &'static str,
+) -> Result<OwnedFd, ProbeError> {
+    let raw_fd = unsafe { libc::socket(domain, kind, protocol) };
+    if raw_fd < 0 {
+        return Err(socket_error(operation, io::Error::last_os_error()));
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+}
+
+#[cfg(unix)]
+fn set_nonblocking(fd: libc::c_int) -> Result<(), ProbeError> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(socket_error(
+            "set TCP trace nonblocking",
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+/// Read and clear the socket's pending error (`SO_ERROR`).
+#[cfg(unix)]
+fn pending_socket_error(fd: libc::c_int) -> Result<libc::c_int, ProbeError> {
+    let mut value: libc::c_int = 0;
+    let mut length = mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let status = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            (&raw mut value).cast(),
+            &mut length,
+        )
+    };
+    if status != 0 {
+        return Err(socket_error(
+            "read socket error state",
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn local_port(fd: libc::c_int, operation: &'static str) -> Result<u16, ProbeError> {
+    let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
+    let mut length = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    if unsafe { libc::getsockname(fd, storage.as_mut_ptr().cast(), &mut length) } != 0 {
+        return Err(socket_error(operation, io::Error::last_os_error()));
+    }
+    let storage = unsafe { storage.assume_init() };
+    sockaddr_port(&storage).ok_or_else(|| ProbeError::Io {
+        operation,
+        message: "socket has no IP address".into(),
+    })
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketKind {
+    Raw,
+    /// Unprivileged ICMP socket (`SOCK_DGRAM`). BSD/macOS deliver ICMP to it
+    /// like a raw socket; Linux "ping sockets" rewrite the echo identifier and
+    /// queue ICMP errors on the socket error queue.
+    Datagram,
+}
+
+#[cfg(unix)]
+const ICMP_PERMISSION_HINT: &str = "run with sudo/root (or grant CAP_NET_RAW on Linux), \
+     register the privileged helper, or on Linux allow unprivileged ICMP sockets via \
+     the net.ipv4.ping_group_range sysctl";
+
 #[cfg(unix)]
 struct RawIcmpSocket {
     fd: OwnedFd,
+    kind: SocketKind,
 }
 
 #[cfg(unix)]
@@ -1060,6 +1671,8 @@ impl RawIcmpSocket {
         Self::new_protocol(family, protocol, timeout)
     }
 
+    /// Open a raw socket for `protocol`. ICMP falls back to an unprivileged
+    /// datagram socket when raw access is denied.
     fn new_protocol(
         family: AddressFamily,
         protocol: libc::c_int,
@@ -1069,14 +1682,44 @@ impl RawIcmpSocket {
             AddressFamily::Ipv4 => libc::AF_INET,
             AddressFamily::Ipv6 => libc::AF_INET6,
         };
-        let raw_fd = unsafe { libc::socket(domain, libc::SOCK_RAW, protocol) };
-        if raw_fd < 0 {
-            return Err(socket_error(
-                "open raw ICMP socket",
-                io::Error::last_os_error(),
-            ));
-        }
-        let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let icmp = matches!(protocol, libc::IPPROTO_ICMP | libc::IPPROTO_ICMPV6);
+        let (fd, kind) = match open_socket(domain, libc::SOCK_RAW, protocol, "open raw ICMP socket")
+        {
+            Ok(fd) => (fd, SocketKind::Raw),
+            Err(ProbeError::Permission { message: raw, .. }) if icmp => {
+                match open_socket(
+                    domain,
+                    libc::SOCK_DGRAM,
+                    protocol,
+                    "open datagram ICMP socket",
+                ) {
+                    Ok(fd) => {
+                        static ONCE: std::sync::Once = std::sync::Once::new();
+                        ONCE.call_once(|| {
+                            log::info!(
+                                "raw ICMP socket denied ({raw}); using unprivileged datagram ICMP sockets"
+                            );
+                        });
+                        (fd, SocketKind::Datagram)
+                    }
+                    Err(error) => {
+                        let datagram = match error {
+                            ProbeError::Permission { message, .. }
+                            | ProbeError::Io { message, .. } => message,
+                            other => other.to_string(),
+                        };
+                        return Err(ProbeError::Permission {
+                            operation: "open ICMP socket",
+                            message: format!(
+                                "raw socket: {raw}; datagram socket: {datagram}; \
+                                 {ICMP_PERMISSION_HINT}"
+                            ),
+                        });
+                    }
+                }
+            }
+            Err(error) => return Err(error),
+        };
         let timeval = libc::timeval {
             tv_sec: timeout.as_secs().try_into().unwrap_or(libc::time_t::MAX),
             tv_usec: timeout.subsec_micros() as libc::suseconds_t,
@@ -1088,7 +1731,36 @@ impl RawIcmpSocket {
             &timeval,
             "set raw socket receive timeout",
         )?;
-        Ok(Self { fd })
+        Ok(Self { fd, kind })
+    }
+
+    /// Return the echo identifier replies will carry. Linux ping sockets
+    /// replace it with the socket's local port and report ICMP errors through
+    /// the error queue, which is enabled here.
+    #[cfg(target_os = "linux")]
+    fn prepare_echo(&self, family: AddressFamily, identifier: u16) -> Result<u16, ProbeError> {
+        if self.kind == SocketKind::Raw {
+            return Ok(identifier);
+        }
+        let fd = self.fd.as_raw_fd();
+        enable_error_queue(fd, family)?;
+        let unspecified = match family {
+            AddressFamily::Ipv4 => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            AddressFamily::Ipv6 => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        };
+        let (storage, length) = socket_address(unspecified);
+        if unsafe { libc::bind(fd, (&raw const storage).cast(), length) } != 0 {
+            return Err(socket_error(
+                "bind datagram ICMP socket",
+                io::Error::last_os_error(),
+            ));
+        }
+        local_port(fd, "read datagram ICMP identifier")
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn prepare_echo(&self, _family: AddressFamily, identifier: u16) -> Result<u16, ProbeError> {
+        Ok(identifier)
     }
 
     fn set_hop_limit(&self, family: AddressFamily, ttl: u8) -> Result<(), ProbeError> {
@@ -1165,7 +1837,7 @@ impl RawIcmpSocket {
         })
     }
 
-    fn send_to(&self, packet: &[u8], target: SocketAddr) -> Result<(), ProbeError> {
+    fn send_to(&self, packet: &[u8], target: SocketAddr) -> Result<SendOutcome, ProbeError> {
         let (storage, length) = socket_address(target);
         let sent = unsafe {
             libc::sendto(
@@ -1177,48 +1849,48 @@ impl RawIcmpSocket {
                 length,
             )
         };
-        if sent < 0 {
-            return Err(socket_error(
-                "send raw ICMP probe",
-                io::Error::last_os_error(),
-            ));
-        }
-        if sent as usize != packet.len() {
-            return Err(ProbeError::Io {
-                operation: "send raw ICMP probe",
-                message: format!("short write: sent {sent} of {} bytes", packet.len()),
-            });
-        }
-        Ok(())
+        send_outcome("send raw ICMP probe", sent, packet.len())
     }
 
+    /// Read one queued packet without blocking; callers wait with `poll()`.
     fn receive(&self) -> Result<ReceivedPacket, ProbeError> {
         let mut bytes = vec![0u8; 65_535];
-        let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-        let mut length = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        let received = unsafe {
-            libc::recvfrom(
-                self.fd.as_raw_fd(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-                0,
-                storage.as_mut_ptr().cast(),
-                &mut length,
-            )
-        };
-        if received < 0 {
-            let error = io::Error::last_os_error();
-            if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) {
-                return Ok(None);
+        loop {
+            let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
+            let mut length = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+            let received = unsafe {
+                libc::recvfrom(
+                    self.fd.as_raw_fd(),
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                    libc::MSG_DONTWAIT,
+                    storage.as_mut_ptr().cast(),
+                    &mut length,
+                )
+            };
+            if received < 0 {
+                let error = io::Error::last_os_error();
+                match error.kind() {
+                    io::ErrorKind::Interrupted => continue,
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => return Ok(None),
+                    // A datagram socket surfaces asynchronous ICMP errors as a
+                    // failed read; they are reported through the error queue.
+                    _ if self.kind == SocketKind::Datagram
+                        && (is_route_error(&error)
+                            || matches!(
+                                error.raw_os_error(),
+                                Some(libc::ECONNREFUSED | libc::EMSGSIZE | libc::EPROTO)
+                            )) =>
+                    {
+                        return Ok(None);
+                    }
+                    _ => return Err(socket_error("receive raw ICMP response", error)),
+                }
             }
-            return Err(socket_error("receive raw ICMP response", error));
+            bytes.truncate(received as usize);
+            let storage = unsafe { storage.assume_init() };
+            return Ok(Some((bytes, sockaddr_ip(&storage))));
         }
-        bytes.truncate(received as usize);
-        let storage = unsafe { storage.assume_init() };
-        Ok(Some((bytes, sockaddr_ip(&storage))))
     }
 }
 
@@ -1234,14 +1906,12 @@ impl RawIpSocket {
             AddressFamily::Ipv4 => libc::AF_INET,
             AddressFamily::Ipv6 => libc::AF_INET6,
         };
-        let raw_fd = unsafe { libc::socket(domain, libc::SOCK_RAW, libc::IPPROTO_RAW) };
-        if raw_fd < 0 {
-            return Err(socket_error(
-                "open raw IP socket",
-                io::Error::last_os_error(),
-            ));
-        }
-        let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let fd = open_socket(
+            domain,
+            libc::SOCK_RAW,
+            libc::IPPROTO_RAW,
+            "open raw IP socket",
+        )?;
         if family == AddressFamily::Ipv4 {
             let enabled: libc::c_int = 1;
             set_option(
@@ -1255,7 +1925,7 @@ impl RawIpSocket {
         Ok(Self { fd })
     }
 
-    fn send_to(&self, packet: &[u8], target: SocketAddr) -> Result<(), ProbeError> {
+    fn send_to(&self, packet: &[u8], target: SocketAddr) -> Result<SendOutcome, ProbeError> {
         let (storage, length) = socket_address(target);
         let sent = unsafe {
             libc::sendto(
@@ -1267,20 +1937,161 @@ impl RawIpSocket {
                 length,
             )
         };
-        if sent < 0 {
-            return Err(socket_error(
-                "send raw TCP probe",
-                io::Error::last_os_error(),
-            ));
-        }
-        if sent as usize != packet.len() {
-            return Err(ProbeError::Io {
-                operation: "send raw TCP probe",
-                message: format!("short write: sent {sent} of {} bytes", packet.len()),
-            });
-        }
-        Ok(())
+        send_outcome("send raw TCP probe", sent, packet.len())
     }
+}
+
+/// One ICMP error reported through a Linux socket error queue
+/// (`IP_RECVERR` / `IPV6_RECVERR`).
+#[cfg(target_os = "linux")]
+struct QueuedError {
+    origin: u8,
+    icmp_type: u8,
+    code: u8,
+    info: u32,
+    /// The router or host that sent the ICMP error.
+    offender: Option<IpAddr>,
+    /// The original destination and port of the probe.
+    destination: Option<SocketAddr>,
+    /// The start of the original transport payload.
+    payload: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+impl QueuedError {
+    fn kind(&self) -> Option<IcmpKind> {
+        match (self.origin, self.icmp_type) {
+            (libc::SO_EE_ORIGIN_ICMP, 11) | (libc::SO_EE_ORIGIN_ICMP6, 3) => {
+                Some(IcmpKind::TimeExceeded)
+            }
+            (libc::SO_EE_ORIGIN_ICMP, 3) | (libc::SO_EE_ORIGIN_ICMP6, 1) => {
+                Some(IcmpKind::DestinationUnreachable)
+            }
+            (libc::SO_EE_ORIGIN_ICMP6, 2) => Some(IcmpKind::PacketTooBig),
+            (libc::SO_EE_ORIGIN_ICMP, 12) | (libc::SO_EE_ORIGIN_ICMP6, 4) => {
+                Some(IcmpKind::ParameterProblem)
+            }
+            _ => None,
+        }
+    }
+
+    fn next_hop_mtu(&self) -> Option<u32> {
+        match (self.origin, self.icmp_type, self.code) {
+            (libc::SO_EE_ORIGIN_ICMP, 3, 4) | (libc::SO_EE_ORIGIN_ICMP6, 2, _) => Some(self.info),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn enable_error_queue(fd: libc::c_int, family: AddressFamily) -> Result<(), ProbeError> {
+    let enabled: libc::c_int = 1;
+    let (level, option) = match family {
+        AddressFamily::Ipv4 => (libc::SOL_IP, libc::IP_RECVERR),
+        AddressFamily::Ipv6 => (libc::SOL_IPV6, libc::IPV6_RECVERR),
+    };
+    set_option(fd, level, option, &enabled, "enable ICMP error queue")
+}
+
+/// Drop stale queued errors and the pending socket error before a new probe,
+/// so neither is attributed to it or fails its send.
+#[cfg(target_os = "linux")]
+fn discard_error_queue(fd: libc::c_int) -> Result<(), ProbeError> {
+    while receive_error_queue(fd)?.is_some() {}
+    pending_socket_error(fd).map(|_| ())
+}
+
+/// Dequeue one entry from the socket error queue without blocking.
+#[cfg(target_os = "linux")]
+fn receive_error_queue(fd: libc::c_int) -> Result<Option<QueuedError>, ProbeError> {
+    let mut payload = vec![0u8; 512];
+    let mut control = [0u64; 64];
+    let mut name = MaybeUninit::<libc::sockaddr_storage>::zeroed();
+    let mut iov = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+    let mut header = unsafe { mem::zeroed::<libc::msghdr>() };
+    header.msg_name = name.as_mut_ptr().cast();
+    header.msg_namelen = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    header.msg_iov = &raw mut iov;
+    header.msg_iovlen = 1;
+    header.msg_control = control.as_mut_ptr().cast();
+    header.msg_controllen = mem::size_of_val(&control) as _;
+    let received = loop {
+        let received =
+            unsafe { libc::recvmsg(fd, &raw mut header, libc::MSG_ERRQUEUE | libc::MSG_DONTWAIT) };
+        if received >= 0 {
+            break received as usize;
+        }
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::WouldBlock => return Ok(None),
+            _ => return Err(socket_error("receive ICMP error queue", error)),
+        }
+    };
+    payload.truncate(received.min(payload.len()));
+    let name = unsafe { name.assume_init() };
+    let destination = sockaddr_ip(&name)
+        .zip(sockaddr_port(&name))
+        .map(|(address, port)| SocketAddr::new(address, port));
+    // Entries without an extended-error message keep origin 0 (no ICMP kind).
+    let mut queued = QueuedError {
+        origin: 0,
+        icmp_type: 0,
+        code: 0,
+        info: 0,
+        offender: None,
+        destination,
+        payload,
+    };
+    let mut message = unsafe { libc::CMSG_FIRSTHDR(&raw const header) };
+    while !message.is_null() {
+        let (level, kind, length) = unsafe {
+            (
+                (*message).cmsg_level,
+                (*message).cmsg_type,
+                (*message).cmsg_len as usize,
+            )
+        };
+        let is_error = (level == libc::SOL_IP && kind == libc::IP_RECVERR)
+            || (level == libc::SOL_IPV6 && kind == libc::IPV6_RECVERR);
+        let header_length = unsafe { libc::CMSG_LEN(0) } as usize;
+        let error_length = mem::size_of::<libc::sock_extended_err>();
+        if is_error && length >= header_length + error_length {
+            let data = unsafe { libc::CMSG_DATA(message) };
+            let error = unsafe { data.cast::<libc::sock_extended_err>().read_unaligned() };
+            // The offender address directly follows the extended error.
+            let available = length - header_length - error_length;
+            let mut offender = unsafe { mem::zeroed::<libc::sockaddr_storage>() };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    data.add(error_length),
+                    (&raw mut offender).cast::<u8>(),
+                    available.min(mem::size_of::<libc::sockaddr_storage>()),
+                );
+            }
+            queued.origin = error.ee_origin;
+            queued.icmp_type = error.ee_type;
+            queued.code = error.ee_code;
+            queued.info = error.ee_info;
+            queued.offender = sockaddr_ip(&offender);
+        }
+        message = unsafe { libc::CMSG_NXTHDR(&raw const header, message) };
+    }
+    Ok(Some(queued))
+}
+
+/// The sequence of an echo request quoted in a Linux error-queue payload.
+#[cfg(target_os = "linux")]
+fn quoted_echo_sequence(payload: &[u8], family: AddressFamily) -> Option<u16> {
+    let request = match family {
+        AddressFamily::Ipv4 => 8,
+        AddressFamily::Ipv6 => 128,
+    };
+    (payload.len() >= 8 && payload[0] == request)
+        .then(|| u16::from_be_bytes([payload[6], payload[7]]))
 }
 
 #[cfg(unix)]
@@ -1309,16 +2120,19 @@ fn set_option<T>(
 
 #[cfg(unix)]
 fn socket_error(operation: &'static str, error: io::Error) -> ProbeError {
-    if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM)) {
-        ProbeError::Permission {
+    match error.raw_os_error() {
+        Some(libc::EACCES | libc::EPERM) => ProbeError::Permission {
             operation,
             message: error.to_string(),
-        }
-    } else {
-        ProbeError::Io {
+        },
+        Some(libc::EMFILE | libc::ENFILE) => ProbeError::Io {
+            operation,
+            message: format!("too many open files: {error}"),
+        },
+        _ => ProbeError::Io {
             operation,
             message: error.to_string(),
-        }
+        },
     }
 }
 
@@ -1414,6 +2228,22 @@ fn socket_address(target: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_
     }
 }
 
+/// Like [`socket_address`], but keeps the port for `connect()`.
+#[cfg(unix)]
+fn socket_address_with_port(target: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+    let (mut storage, length) = socket_address(target);
+    let port = target.port().to_be();
+    match target {
+        SocketAddr::V4(_) => unsafe {
+            (*(&raw mut storage).cast::<libc::sockaddr_in>()).sin_port = port;
+        },
+        SocketAddr::V6(_) => unsafe {
+            (*(&raw mut storage).cast::<libc::sockaddr_in6>()).sin6_port = port;
+        },
+    }
+    (storage, length)
+}
+
 #[cfg(unix)]
 fn sockaddr_ip(storage: &libc::sockaddr_storage) -> Option<IpAddr> {
     match i32::from(storage.ss_family) {
@@ -1426,6 +2256,21 @@ fn sockaddr_ip(storage: &libc::sockaddr_storage) -> Option<IpAddr> {
         libc::AF_INET6 => {
             let raw = unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
             Some(IpAddr::V6(Ipv6Addr::from(raw.sin6_addr.s6_addr)))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(unix)]
+fn sockaddr_port(storage: &libc::sockaddr_storage) -> Option<u16> {
+    match i32::from(storage.ss_family) {
+        libc::AF_INET => {
+            let raw = unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
+            Some(u16::from_be(raw.sin_port))
+        }
+        libc::AF_INET6 => {
+            let raw = unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
+            Some(u16::from_be(raw.sin6_port))
         }
         _ => None,
     }

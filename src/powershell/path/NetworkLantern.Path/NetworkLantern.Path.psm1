@@ -17,6 +17,8 @@ $privateLoadOrder = @(
   'Get-ToolIpSwitch.ps1',
   'Get-HostAddressesWithTimeout.ps1',
   'Test-TcpPort.ps1',
+  'Invoke-NativeToolWithTimeout.ps1',
+  'Test-TraceReachedDestination.ps1',
   'Invoke-PingRaw.ps1',
   'Invoke-TracertRaw.ps1',
   'Invoke-PathpingRaw.ps1',

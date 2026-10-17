@@ -188,7 +188,7 @@ Default output and mutable-state locations:
 | `crates/` and `desktop/` | Rust CLI and Tauri desktop under active migration | Rust 1.96.0; in development alongside the behavior reference | [Rust application](docs/RUST.md) |
 
 The Rust CLI and desktop are where new behavior is built. The PowerShell and Bash
-tools stay the tested behavior reference until native privileged behavior is
+tools stay the behavior reference (tested by the private suite) until native privileged behavior is
 verified on matching hosts, so treat the Rust surfaces as in-progress. See
 [the archive trigger](docs/architecture.md#legacy-reference-and-archive-trigger).
 
@@ -219,8 +219,13 @@ The authoritative gate is:
 ./scripts/ci-local.sh
 ```
 
-It uses controlled fakes and dry-run paths rather than live probes or Windows
-mutation; [docs/TESTING.md](docs/TESTING.md#the-complete-gate) lists its steps.
+In this public repository the gate runs ShellCheck, the secret scan,
+PSScriptAnalyzer, and the Rust phase (formatting, Clippy, inline unit tests, CLI
+and desktop builds); [docs/TESTING.md](docs/TESTING.md#the-complete-gate) lists
+its steps. The behavioral suites (Pester, Bats, Vitest, Playwright and WebdriverIO,
+Rust integration and architecture tests) are maintained in a separate private
+repository and are not published here, so the public gate and CI do not exercise
+legacy or desktop behavior.
 
 Narrower checks while iterating:
 
@@ -258,9 +263,13 @@ and known verification gaps. Contribution workflow and review requirements are i
 - Throughput tests can consume substantial bandwidth. A default full matrix can
   plan up to 1,145 tests when `iperf3` supports bidirectional mode; preview and
   restrict the matrix first.
-- Direct Linux and macOS throughput runs require `-SkipReachabilityCheck
-  -DisableMtuProbe`. The root workflow does not expose those switches, so its live
-  throughput steps currently require Windows.
+- Direct Linux and macOS runs of the PowerShell throughput tool require
+  `-SkipReachabilityCheck -DisableMtuProbe`. The root workflow does not expose
+  those switches, so its live throughput steps currently require Windows. The Rust
+  CLI needs neither switch wherever `network-lantern doctor` reports ICMP access;
+  see [Native socket access](docs/RUST.md#native-socket-access).
+- The Bash path tool needs root, a setuid `mtr-packet` (macOS), or
+  `CAP_NET_RAW` (Linux); see [Path diagnostics](docs/workflows/diagnose-path.md).
 - Real Windows tuning Backup, Apply, and Restore change system state. Run them
   only from a trusted checkout with a trusted executable search path. Their
   validation paths are tested, but an elevated apply-and-restore cycle has not

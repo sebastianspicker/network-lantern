@@ -37,7 +37,10 @@ const UDP_CONNECT_MSG: [u8; 4] = *b"9876";
 const UDP_CONNECT_REPLY: [u8; 4] = *b"6789";
 const UDP_LEGACY_REPLY_LE: [u8; 4] = 987_654_321_u32.to_le_bytes();
 const TCP_BLOCK_SIZE: usize = 128 * 1024;
-const UDP_BLOCK_SIZE: usize = 1_460;
+const UDP_BLOCK_SIZE_V4: usize = 1_460;
+// IPv6 headers are 20 bytes larger than IPv4, so shrink the payload to stay
+// within a 1500-byte MTU without fragmentation.
+const UDP_BLOCK_SIZE_V6: usize = 1_440;
 pub(crate) const MAX_CLIENT_TIMEOUT_MS: u64 = 300_000;
 
 #[derive(Debug, Clone)]
@@ -107,6 +110,8 @@ impl Iperf3Client {
         for attempt in 1..=attempts {
             match self.run_test_once(spec, cancellation, attempt).await {
                 Ok(result) => return Ok(result),
+                Err(ThroughputError::Cancelled) => return Err(ThroughputError::Cancelled),
+                Err(_) if cancellation.is_cancelled() => return Err(ThroughputError::Cancelled),
                 Err(error) if error.retryable() && attempt < attempts => {
                     last = Some(error);
                     Self::retry_backoff(cancellation, retry.backoff_ms).await?;
@@ -134,10 +139,35 @@ impl Iperf3Client {
     ) -> Result<TestResult> {
         validate_spec(spec)?;
         let started = Instant::now();
-        let address = self.resolve(spec, cancellation).await?;
-        let (mut control, _control_traffic_class) = self
-            .connect_tcp(address, 0, None, cancellation, "control connection")
-            .await?;
+        let addresses = self.resolve(spec, cancellation).await?;
+        let mut connected = None;
+        let mut last_error = None;
+        for address in addresses {
+            match self
+                .connect_tcp(address, 0, None, cancellation, "control connection")
+                .await
+            {
+                Ok((stream, ..)) => {
+                    connected = Some((address, stream));
+                    break;
+                }
+                Err(ThroughputError::Cancelled) => return Err(ThroughputError::Cancelled),
+                Err(error) => {
+                    log::debug!("control connection to {address} failed: {error}");
+                    last_error = Some(error);
+                }
+            }
+        }
+        let Some((address, mut control)) = connected else {
+            return Err(last_error.unwrap_or_else(|| {
+                ThroughputError::Validation(format!(
+                    "target '{}' has no address matching {:?}",
+                    spec.target, spec.ip_version
+                ))
+            }));
+        };
+        let udp_block_size = udp_block_size(address);
+        let mut notes = Vec::new();
         control
             .set_nodelay(true)
             .map_err(|error| ThroughputError::io("control socket setup", error))?;
@@ -151,21 +181,23 @@ impl Iperf3Client {
         .await?;
         self.expect_state(&mut control, PARAM_EXCHANGE, cancellation)
             .await?;
-        let parameters = parameters(spec);
+        let parameters = parameters(spec, udp_block_size);
         self.write_json(&mut control, &parameters, cancellation)
             .await?;
         self.expect_state(&mut control, CREATE_STREAMS, cancellation)
             .await?;
 
         let mut streams = self
-            .create_streams(spec, address, &cookie, cancellation)
+            .create_streams(spec, address, &cookie, cancellation, &mut notes)
             .await?;
         self.expect_state(&mut control, TEST_START, cancellation)
             .await?;
         self.expect_state(&mut control, TEST_RUNNING, cancellation)
             .await?;
 
-        let data_result = self.run_data(spec, &mut streams, cancellation).await;
+        let data_result = self
+            .run_data(spec, &mut streams, udp_block_size, cancellation)
+            .await;
         if data_result.is_err() {
             let _ = tokio::time::timeout(
                 Duration::from_millis(100),
@@ -209,20 +241,24 @@ impl Iperf3Client {
         })
         .await?;
 
-        build_result(
+        let result = build_result(
             spec.clone(),
             attempt,
             started.elapsed(),
             outcomes,
             server_result,
-        )
+        )?;
+        for note in notes {
+            log::debug!("{note}");
+        }
+        Ok(result)
     }
 
     async fn resolve(
         &self,
         spec: &TestSpec,
         cancellation: &CancellationToken,
-    ) -> Result<SocketAddr> {
+    ) -> Result<Vec<SocketAddr>> {
         let target = (spec.target.as_str(), spec.port);
         let addresses = self
             .phase(cancellation, "name resolution", async {
@@ -232,19 +268,21 @@ impl Iperf3Client {
                 Ok(resolved.collect::<Vec<_>>())
             })
             .await?;
-        addresses
+        let addresses = addresses
             .into_iter()
-            .find(|address| match spec.ip_version {
+            .filter(|address| match spec.ip_version {
                 IpVersion::Auto => true,
                 IpVersion::Ipv4 => address.is_ipv4(),
                 IpVersion::Ipv6 => address.is_ipv6(),
             })
-            .ok_or_else(|| {
-                ThroughputError::Validation(format!(
-                    "target '{}' has no address matching {:?}",
-                    spec.target, spec.ip_version
-                ))
-            })
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err(ThroughputError::Validation(format!(
+                "target '{}' has no address matching {:?}",
+                spec.target, spec.ip_version
+            )));
+        }
+        Ok(addresses)
     }
 
     async fn connect_tcp(
@@ -254,7 +292,7 @@ impl Iperf3Client {
         window: Option<u32>,
         cancellation: &CancellationToken,
         phase: &'static str,
-    ) -> Result<(TcpStream, Option<TrafficClassFlow>)> {
+    ) -> Result<(TcpStream, Option<TrafficClassFlow>, Option<String>)> {
         let socket = if address.is_ipv4() {
             TcpSocket::new_v4()
         } else {
@@ -270,6 +308,7 @@ impl Iperf3Client {
             };
             result.map_err(|error| ThroughputError::io("DSCP socket setup", error))?;
         }
+        let mut window_note = None;
         if let Some(size) = window {
             socket
                 .set_send_buffer_size(size)
@@ -277,6 +316,11 @@ impl Iperf3Client {
             socket
                 .set_recv_buffer_size(size)
                 .map_err(|error| ThroughputError::io("TCP window setup", error))?;
+            if let (Ok(send), Ok(recv)) = (socket.send_buffer_size(), socket.recv_buffer_size()) {
+                window_note = Some(format!(
+                    "Effective TCP window: requested {size} bytes, socket send buffer {send} bytes, receive buffer {recv} bytes"
+                ));
+            }
         }
         tokio::select! {
             _ = cancellation.cancelled() => Err(ThroughputError::Cancelled),
@@ -293,7 +337,7 @@ impl Iperf3Client {
                         };
                         #[cfg(not(windows))]
                         let traffic_class = None;
-                        Ok((stream, traffic_class))
+                        Ok((stream, traffic_class, window_note))
                     },
                     Ok(Err(error)) => Err(ThroughputError::io(phase, error)),
                     Err(_) => Err(ThroughputError::Timeout {
@@ -311,6 +355,7 @@ impl Iperf3Client {
         address: SocketAddr,
         cookie: &[u8; COOKIE_SIZE],
         cancellation: &CancellationToken,
+        notes: &mut Vec<String>,
     ) -> Result<Vec<DataStream>> {
         let mut streams = Vec::new();
         let roles: &[bool] = match spec.direction {
@@ -322,7 +367,7 @@ impl Iperf3Client {
             for _ in 0..spec.streams {
                 let stream = match spec.protocol {
                     Protocol::Tcp => {
-                        let (mut socket, traffic_class) = self
+                        let (mut socket, traffic_class, window_note) = self
                             .connect_tcp(
                                 address,
                                 spec.tos,
@@ -331,6 +376,11 @@ impl Iperf3Client {
                                 "TCP data connection",
                             )
                             .await?;
+                        if let Some(note) = window_note
+                            && !notes.contains(&note)
+                        {
+                            notes.push(note);
+                        }
                         self.phase(cancellation, "TCP stream cookie", async {
                             socket
                                 .write_all(cookie)
@@ -434,6 +484,7 @@ impl Iperf3Client {
         &self,
         spec: &TestSpec,
         streams: &mut Vec<DataStream>,
+        udp_block_size: usize,
         cancellation: &CancellationToken,
     ) -> Result<(Vec<StreamOutcome>, Vec<DataStream>)> {
         let started = Instant::now();
@@ -486,8 +537,16 @@ impl Iperf3Client {
                         socket,
                         sender,
                     } if sender => {
-                        let outcome =
-                            udp_send(stream_id, &socket, udp_rate, omit_end, end, token).await?;
+                        let outcome = udp_send(
+                            stream_id,
+                            &socket,
+                            udp_rate,
+                            udp_block_size,
+                            omit_end,
+                            end,
+                            token,
+                        )
+                        .await?;
                         Ok((
                             outcome,
                             DataStream::Udp {
@@ -740,7 +799,15 @@ struct StreamOutcome {
     wire_errors: u64,
 }
 
-fn parameters(spec: &TestSpec) -> Value {
+fn udp_block_size(address: SocketAddr) -> usize {
+    if address.is_ipv6() {
+        UDP_BLOCK_SIZE_V6
+    } else {
+        UDP_BLOCK_SIZE_V4
+    }
+}
+
+fn parameters(spec: &TestSpec, udp_block_size: usize) -> Value {
     let mut value = json!({
         "omit": spec.omit_secs,
         "time": spec.duration_secs,
@@ -775,7 +842,7 @@ fn parameters(spec: &TestSpec) -> Value {
             "bandwidth".into(),
             Value::from(spec.udp_rate_bps.unwrap_or(1_000_000)),
         );
-        object.insert("len".into(), Value::from(UDP_BLOCK_SIZE));
+        object.insert("len".into(), Value::from(udp_block_size));
         object.insert("udp_counters_64bit".into(), Value::from(1));
     } else {
         object.insert("len".into(), Value::from(TCP_BLOCK_SIZE));
@@ -926,22 +993,69 @@ mod tests {
             omit_secs: 1,
             phase: crate::TestPhase::TcpMatrix,
         };
-        let reverse = parameters(&base);
+        let reverse = parameters(&base, UDP_BLOCK_SIZE_V4);
         assert_eq!(reverse["tcp"], true);
         assert_eq!(reverse["reverse"], true);
         assert_eq!(reverse["parallel"], 4);
         assert_eq!(reverse["TOS"], 184);
         let mut bidir = base.clone();
         bidir.direction = Direction::Bidirectional;
-        assert_eq!(parameters(&bidir)["bidirectional"], true);
+        assert_eq!(parameters(&bidir, UDP_BLOCK_SIZE_V4)["bidirectional"], true);
         let mut udp = base;
         udp.protocol = Protocol::Udp;
         udp.direction = Direction::Tx;
         udp.udp_rate_bps = Some(10_000_000);
-        let udp = parameters(&udp);
+        let v6 = parameters(&udp, udp_block_size("[::1]:5201".parse().unwrap()));
+        assert_eq!(v6["len"], UDP_BLOCK_SIZE_V6);
+        let udp = parameters(&udp, udp_block_size("127.0.0.1:5201".parse().unwrap()));
+        assert_eq!(udp["len"], UDP_BLOCK_SIZE_V4);
         assert_eq!(udp["udp"], true);
         assert_eq!(udp["bandwidth"], 10_000_000);
         assert_eq!(udp["udp_counters_64bit"], 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_a_retry_is_not_reported_as_exhausted() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            drop(first);
+            let (second, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(second);
+        });
+        let spec = TestSpec {
+            id: 1,
+            target: "127.0.0.1".into(),
+            port,
+            ip_version: IpVersion::Ipv4,
+            protocol: Protocol::Tcp,
+            direction: Direction::Tx,
+            dscp: crate::DscpClass::CS0,
+            tos: 0,
+            streams: 1,
+            tcp_window_bytes: None,
+            udp_rate_bps: None,
+            duration_secs: 1,
+            omit_secs: 0,
+            phase: crate::TestPhase::Single,
+        };
+        let token = CancellationToken::new();
+        let canceller = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            canceller.cancel();
+        });
+        let retry = RetryPolicy {
+            max_retries: 2,
+            backoff_ms: 0,
+        };
+        let error = Iperf3Client::new()
+            .run_test_with_retry(&spec, retry, &token)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ThroughputError::Cancelled), "{error:?}");
     }
 
     #[test]

@@ -60,7 +60,8 @@ pub fn check_path(path: &Path) -> Result<()> {
         std::env::current_dir()?.join(path)
     };
     let mut walked = std::path::PathBuf::new();
-    for component in full.components() {
+    let last = full.components().count();
+    for (index, component) in full.components().enumerate() {
         if matches!(component, Component::ParentDir) {
             return Err(Error::validation("Parent path components are not allowed"));
         }
@@ -74,8 +75,13 @@ pub fn check_path(path: &Path) -> Result<()> {
                         return Err(Error::validation("Reparse paths are not allowed"));
                     }
                 }
-                if meta.file_type().is_symlink() {
-                    return Err(Error::validation("Symbolic links are not allowed"));
+                if meta.file_type().is_symlink()
+                    && !(index + 1 < last && system_link(&walked, &meta)?)
+                {
+                    return Err(Error::validation(format!(
+                        "Symbolic links are not allowed: {}",
+                        walked.display()
+                    )));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
@@ -83,6 +89,27 @@ pub fn check_path(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+/// System links such as macOS `/tmp` and `/var`: an intermediate link owned by root whose
+/// parent directory is root-owned and writable only by its owner. No other user can create
+/// or replace such a link.
+#[cfg(unix)]
+fn system_link(link: &Path, meta: &fs::Metadata) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let Some(parent) = link.parent() else {
+        return Ok(false);
+    };
+    // Judge the directory the link really lives in, even when the parent is a trusted link.
+    let parent = fs::metadata(parent)?;
+    Ok(trusted_link_owners(meta.uid(), parent.uid(), parent.mode()))
+}
+#[cfg(not(unix))]
+fn system_link(_link: &Path, _meta: &fs::Metadata) -> Result<bool> {
+    Ok(false)
+}
+#[cfg(unix)]
+fn trusted_link_owners(link_uid: u32, parent_uid: u32, parent_mode: u32) -> bool {
+    link_uid == 0 && parent_uid == 0 && parent_mode & 0o022 == 0
 }
 pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
     check_path(path)?;
@@ -415,6 +442,37 @@ mod tests {
         assert!(atomic_bytes(&link, b"no").is_err());
         assert!(SidecarLock::acquire(&link, Duration::ZERO).is_err());
         assert!(!dir.path().join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_root_owned_links_in_protected_directories_are_trusted() {
+        assert!(trusted_link_owners(0, 0, 0o40755));
+        assert!(!trusted_link_owners(501, 0, 0o40755));
+        assert!(!trusted_link_owners(0, 501, 0o40755));
+        assert!(!trusted_link_owners(0, 0, 0o41777));
+        assert!(!trusted_link_owners(0, 0, 0o40775));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_links_are_refused_with_the_component_named_even_mid_path() {
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root-owned temp links legitimately satisfy the system-link rule
+        }
+        let dir = tempdir();
+        fs::create_dir(dir.path().join("real")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(dir.path().join("real"), &link).unwrap();
+        let error = check_path(&link.join("file.json")).unwrap_err();
+        assert!(error.message.contains(&link.display().to_string()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_system_links_are_accepted_as_ancestors() {
+        assert!(check_path(Path::new("/tmp/network-lantern-check/summary.json")).is_ok());
+        assert!(check_path(Path::new("/var")).is_err());
     }
 
     #[cfg(unix)]

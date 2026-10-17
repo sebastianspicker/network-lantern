@@ -13,7 +13,6 @@ pub enum RegistryValue {
 pub type RegistryBackup = BTreeMap<String, BTreeMap<String, RegistryValue>>;
 
 pub fn parse_registry_backup(bytes: &[u8], system_profile: bool) -> Result<RegistryBackup> {
-    let text = decode_reg(bytes)?;
     let expected = if system_profile {
         vec![
             (
@@ -40,8 +39,27 @@ pub fn parse_registry_backup(bytes: &[u8], system_profile: bool) -> Result<Regis
             vec![("FastSendDatagramThreshold", false)],
         )]
     };
+    parse_registry_sections(bytes, &expected)
+}
+
+/// Parses the schema-4 `Tcpip_QoS.reg` export: only `Do not use NLA` (a string).
+pub fn parse_tcpip_qos_backup(bytes: &[u8]) -> Result<RegistryBackup> {
+    parse_registry_sections(
+        bytes,
+        &[(
+            "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\QoS",
+            vec![("Do not use NLA", true)],
+        )],
+    )
+}
+
+fn parse_registry_sections(
+    bytes: &[u8],
+    expected: &[(&str, Vec<(&str, bool)>)],
+) -> Result<RegistryBackup> {
+    let text = decode_reg(bytes)?;
     let mut allowed = BTreeMap::new();
-    for (section, values) in &expected {
+    for (section, values) in expected {
         allowed.insert(*section, values.iter().copied().collect::<BTreeMap<_, _>>());
     }
     let mut result: RegistryBackup = BTreeMap::new();

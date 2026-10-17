@@ -230,9 +230,11 @@ function Get-Iperf3Metric {
   $sumSent = $null
   $sumRecv = $null
   $sumUdp = $null
-  if ($end.PSObject.Properties.Name -contains 'sum_sent') { $sumSent = $end.sum_sent }
-  if ($end.PSObject.Properties.Name -contains 'sum_received') { $sumRecv = $end.sum_received }
-  if ($end.PSObject.Properties.Name -contains 'sum') { $sumUdp = $end.sum }
+  # iperf3 reports a failed connection with an empty "end" object, which has no Name member under StrictMode.
+  $endNames = @($end.PSObject.Properties | ForEach-Object { $_.Name })
+  if ($endNames -contains 'sum_sent') { $sumSent = $end.sum_sent }
+  if ($endNames -contains 'sum_received') { $sumRecv = $end.sum_received }
+  if ($endNames -contains 'sum') { $sumUdp = $end.sum }
   $txMbps = $null
   $rxMbps = $null
   $retr = $null

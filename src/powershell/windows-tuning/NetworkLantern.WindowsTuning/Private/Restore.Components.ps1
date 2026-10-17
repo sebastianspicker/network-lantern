@@ -11,9 +11,16 @@ function Restore-NetworkTuningRegistryFromBackup {
   $deniedCount = 0
   $failedCount = 0
 
+  # Only values that Apply changes are restored. SystemProfile and AFD are backed up for
+  # reference but never imported, so unrelated edits made after the backup stay intact.
+  $tcpipQosBacked = $Manifest.Components.Contains('TcpipQos') -and [bool]$Manifest.Components['TcpipQos']
+  if (-not $tcpipQosBacked) {
+    Write-Warning -Message "This backup has no record of the Tcpip\QoS 'Do not use NLA' value (created by an older version or the export failed). That value was not restored; remove it manually if you want to undo local QoS marking."
+    return Get-NetworkTuningRestoreComponentResult -Status 'Skipped' -Message 'Backup has no Tcpip QoS state; nothing restored.'
+  }
+
   $registryArtifacts = @(
-      @{ Path = (Join-Path -Path $BackupFolder -ChildPath $script:NetworkTuningBackupFileSystemProfile); Contract = 'SystemProfile' },
-      @{ Path = (Join-Path -Path $BackupFolder -ChildPath $script:NetworkTuningBackupFileAfdParameters); Contract = 'AfdParameters' }
+      @{ Path = (Join-Path -Path $BackupFolder -ChildPath $script:NetworkTuningBackupFileTcpipQos); Contract = 'TcpipQos' }
     ) | Where-Object { Test-Path -LiteralPath $_.Path -PathType Leaf }
 
   foreach ($artifact in $registryArtifacts) {
@@ -43,7 +50,7 @@ function Restore-NetworkTuningRegistryFromBackup {
     return Get-NetworkTuningRestoreComponentResult -Status 'Warn' -Message 'One or more registry keys failed to restore or were denied by ShouldProcess.'
   }
 
-  return Get-NetworkTuningRestoreComponentResult -Status 'OK' -Message 'Registry keys restored.'
+  return Get-NetworkTuningRestoreComponentResult -Status 'OK' -Message 'Registry values restored.'
 }
 
 function Restore-NetworkTuningNicFromBackup {
@@ -70,10 +77,15 @@ function Restore-NetworkTuningNicFromBackup {
     foreach ($adapter in $adapters) {
       foreach ($property in ($data | Where-Object { $_.Adapter -eq $adapter })) {
         try {
+          if (-not [string]::IsNullOrEmpty($property.RegistryKeyword) -and [string]$property.RegistryValue -ceq 'System.String[]') {
+            # Older backups serialized the value array as its type name; there is nothing valid to restore.
+            Write-Warning -Message ("Skipping NIC property '{0}' on adapter '{1}': the backup holds no usable registry value." -f $property.RegistryKeyword, $adapter)
+            continue
+          }
           if (-not [string]::IsNullOrEmpty($property.RegistryKeyword) -and -not [string]::IsNullOrEmpty($property.RegistryValue)) {
             if ($PSCmdlet.ShouldProcess($adapter, ("Restore NIC advanced property keyword: {0}" -f $property.RegistryKeyword))) {
               $didWork = $true
-              Set-NetAdapterAdvancedProperty -Name $adapter -RegistryKeyword $property.RegistryKeyword -RegistryValue $property.RegistryValue -NoRestart -ErrorAction Stop | Out-Null
+              Set-NetAdapterAdvancedProperty -Name $adapter -RegistryKeyword $property.RegistryKeyword -RegistryValue ([string[]]($property.RegistryValue -split ';')) -NoRestart -ErrorAction Stop | Out-Null
             }
             continue
           }

@@ -202,7 +202,7 @@ path_cleanup_and_exit() {
 	if [[ -n "${CURRENT_MTR_PID:-}" ]]; then
 		kill -KILL "$CURRENT_MTR_PID" 2>/dev/null || true
 	fi
-	rm -f "${CURRENT_TMP:-}" 2>/dev/null
+	rm -f "${CURRENT_TMP:-}" "${CURRENT_ERR:-}" 2>/dev/null
 	if [[ -n "$signal" ]]; then
 		echo "Interrupted (SIG$signal)" >&2
 		exit "$code"
@@ -211,6 +211,7 @@ path_cleanup_and_exit() {
 
 path_install_cleanup_traps() {
 	CURRENT_TMP=""
+	CURRENT_ERR=""
 	CURRENT_MTR_PID=""
 	trap 'path_cleanup_and_exit INT 130' INT
 	trap 'path_cleanup_and_exit TERM 143' TERM
@@ -241,12 +242,16 @@ path_announce_run_plan() {
 path_execute_run_plan() {
 	RUN_OK=0
 	RUN_FAIL=0
+	ABORT_RUN=0
 	local start_ts end_ts entry round type host index=0
 	start_ts=$(date +%s)
 	for entry in "${PLAN_ENTRIES[@]}"; do
 		IFS='|' read -r round type host <<<"$entry"
 		((index++)) || true
 		execute_single_run "$round" "$type" "$host" "$index"
+		if ((ABORT_RUN)); then
+			break
+		fi
 	done
 	end_ts=$(date +%s)
 	elapsed=$((end_ts - start_ts))

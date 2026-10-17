@@ -107,7 +107,8 @@ function Build-RunSummary {
     [string]$Iperf3Version,
     [nullable[double]]$ThresholdMinThroughputMbps,
     [nullable[double]]$ThresholdMaxLossPct,
-    [nullable[double]]$ThresholdMaxJitterMs
+    [nullable[double]]$ThresholdMaxJitterMs,
+    [string]$Interruption
   )
   $failed = @($Results | Where-Object {
       $_.ExitCode -ne 0 -or
@@ -168,7 +169,12 @@ function Build-RunSummary {
       $statusCode = $script:ExitCodes.PartialFailure
     }
   }
-  return [pscustomobject]@{
+  # An interrupted run cannot be a clean success, even if every completed test passed.
+  if ($Interruption -and $status -eq 'Success') {
+    $status = 'PartialFailure'
+    $statusCode = $script:ExitCodes.PartialFailure
+  }
+  $summary = [pscustomobject]@{
     SummaryVersion  = 2
     Timestamp       = $Timestamp
     StartedUtc      = $StartedUtc
@@ -223,6 +229,46 @@ function Build-RunSummary {
       RunIndexPath    = $null
     }
   }
+  if ($Interruption) {
+    $summary | Add-Member -MemberType NoteProperty -Name Partial -Value $true
+    $summary | Add-Member -MemberType NoteProperty -Name Interruption -Value $Interruption
+  }
+  return $summary
+}
+
+function Show-Iperf3SummaryTable {
+  <#
+  .SYNOPSIS
+  Prints one row per completed test to the host. Columns are kept short so the table fits an 80-column host.
+  #>
+  [CmdletBinding()]
+  param(
+    [AllowEmptyCollection()]
+    [object[]]$Results = @()
+  )
+  $rows = @($Results | ForEach-Object {
+      $metrics = $_.Metrics
+      $failed = $_.ExitCode -ne 0 -or $_.JsonParseError -or
+        ($_.PSObject.Properties.Name -contains 'MetricError' -and $_.MetricError)
+      [pscustomobject][ordered]@{
+        No          = $_.No
+        Proto       = $_.Proto
+        Dir         = $_.Dir
+        DSCP        = $_.DSCP
+        Streams     = $_.Streams
+        Win         = $_.Window
+        TX_Mbps     = if ($null -ne $metrics.TxMbps) { [math]::Round([double]$metrics.TxMbps, 2) }
+        RX_Mbps     = if ($null -ne $metrics.RxMbps) { [math]::Round([double]$metrics.RxMbps, 2) }
+        'Loss%'     = if ($null -ne $metrics.LossPct) { [math]::Round([double]$metrics.LossPct, 2) }
+        Jit_ms      = if ($null -ne $metrics.JitterMs) { [math]::Round([double]$metrics.JitterMs, 3) }
+        Result      = if ($failed) { "FAIL ($($_.ExitCode))" } else { 'OK' }
+      }
+    })
+  if ($rows.Count -eq 0) {
+    Write-Information -InformationAction Continue 'Summary: no tests were run.'
+    return
+  }
+  $rows | Format-Table -AutoSize | Out-Host
 }
 
 function Write-Iperf3SupplementalReports {

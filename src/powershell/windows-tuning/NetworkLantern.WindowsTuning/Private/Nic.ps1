@@ -6,9 +6,35 @@ function Get-NetworkTuningPhysicalUpAdapter {
   Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' }
 }
 
+function Resolve-NetworkTuningNicRegistryValue {
+  <#
+  .SYNOPSIS
+    Map a display value (for example 'Disabled') to the raw registry data the driver expects.
+  .OUTPUTS
+    [string] raw registry value, or $null when the property does not list the display value.
+  #>
+  [CmdletBinding()]
+  [OutputType([string])]
+  param(
+    [Parameter(Mandatory)]$Property,
+    [Parameter(Mandatory)][string]$DisplayValue
+  )
+
+  $displayValues = @()
+  $registryValues = @()
+  if ($Property.PSObject.Properties['ValidDisplayValues']) { $displayValues = @($Property.ValidDisplayValues) }
+  if ($Property.PSObject.Properties['ValidRegistryValues']) { $registryValues = @($Property.ValidRegistryValues) }
+  for ($i = 0; $i -lt $displayValues.Count; $i++) {
+    if ([string]::Equals([string]$displayValues[$i], $DisplayValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+      if ($i -lt $registryValues.Count) { return [string]$registryValues[$i] }
+    }
+  }
+  return $null
+}
+
 function Set-NetworkTuningNicAdvancedPropertyIfSupported {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([bool])]
+  [OutputType([bool], [string])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,
@@ -45,12 +71,18 @@ function Set-NetworkTuningNicAdvancedPropertyIfSupported {
 
   $targetHint = if ($keyword) { "Keyword: $keyword" } else { "DisplayName: $DisplayName" }
   if (-not $PSCmdlet.ShouldProcess(("{0}: {1}" -f $Name, $DisplayName), ("Set to '{0}' via {1}" -f $Value, $targetHint))) {
-    return $true
+    return 'Skipped'
   }
 
   try {
     if ($keyword) {
-      Set-NetAdapterAdvancedProperty -Name $Name -RegistryKeyword $keyword -RegistryValue $Value -NoRestart -ErrorAction Stop | Out-Null
+      # $Value is a display value; RegistryValue needs the matching raw registry data.
+      $registryValue = Resolve-NetworkTuningNicRegistryValue -Property @($property)[0] -DisplayValue $Value
+      if ($null -eq $registryValue) {
+        Write-Warning -Message ("Network adapter '{0}': '{1}' does not offer the value '{2}', so it was not changed." -f $Name, $DisplayName, $Value)
+        return $false
+      }
+      Set-NetAdapterAdvancedProperty -Name $Name -RegistryKeyword $keyword -RegistryValue $registryValue -NoRestart -ErrorAction Stop | Out-Null
     } else {
       Set-NetAdapterAdvancedProperty -Name $Name -DisplayName $DisplayName -DisplayValue $Value -NoRestart -ErrorAction Stop | Out-Null
     }
@@ -63,7 +95,7 @@ function Set-NetworkTuningNicAdvancedPropertyIfSupported {
 
 function Set-NetworkTuningNicConfiguration {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  [OutputType([bool])]
+  [OutputType([bool], [string])]
   param(
     [Parameter()]
     [switch]$DryRun
@@ -85,6 +117,8 @@ function Set-NetworkTuningNicConfiguration {
   }
 
   $allSucceeded = $true
+  $appliedCount = 0
+  $declinedCount = 0
   foreach ($nic in $adapters) {
     Write-NetworkTuningInformation -Message ("NIC: {0}" -f $nic.Name)
 
@@ -93,9 +127,13 @@ function Set-NetworkTuningNicConfiguration {
       $value = 'Disabled'
       $propertySucceeded = Set-NetworkTuningNicAdvancedPropertyIfSupported -Name $nic.Name -DisplayName $displayName -Value $value -DryRun:$DryRun
       if ($false -eq $propertySucceeded) { $allSucceeded = $false }
+      elseif (Test-NetworkTuningActionDeclined -Result $propertySucceeded) { $declinedCount++ }
+      else { $appliedCount++ }
     }
 
   }
 
+  # 'Skipped' means every change was declined and nothing was applied.
+  if ($allSucceeded -and $appliedCount -eq 0 -and $declinedCount -gt 0 -and -not $DryRun) { return 'Skipped' }
   return $allSucceeded
 }

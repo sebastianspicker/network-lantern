@@ -175,7 +175,11 @@ pub(super) async fn remove() -> Result<HelperStatus> {
         .await?;
     }
     let result = async {
-        systemd_unit("StopUnit").await?;
+        match systemd_unit("StopUnit").await {
+            // An unloaded unit has nothing to stop; removal stays idempotent.
+            Err(HelperError::Unavailable(message)) if message.contains("not installed") => {}
+            other => other?,
+        }
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let uid = unsafe { libc::geteuid() };
         loop {
@@ -299,6 +303,27 @@ async fn roundtrip(message: Message, deadline: Duration) -> Result<Value> {
         .await
         .map_err(|_| HelperError::Unavailable("Helper operation deadline exceeded".into()))?
 }
+fn map_systemd_error(error: zbus::Error) -> HelperError {
+    match &error {
+        zbus::Error::MethodError(name, _, _) => classify_systemd_error(name.as_str(), &error),
+        _ => HelperError::Protocol(format!("System service manager: {error}")),
+    }
+}
+fn classify_systemd_error(name: &str, error: &zbus::Error) -> HelperError {
+    match name {
+        "org.freedesktop.systemd1.NoSuchUnit" | "org.freedesktop.systemd1.LoadFailed" => {
+            HelperError::Unavailable(
+                "helper service unit is not installed; see deployment/helper/linux".into(),
+            )
+        }
+        "org.freedesktop.DBus.Error.AccessDenied"
+        | "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
+        | "org.freedesktop.PolicyKit1.Error.NotAuthorized" => {
+            HelperError::Authorization(format!("System helper authorization denied: {error}"))
+        }
+        _ => HelperError::Protocol(format!("System service manager: {error}")),
+    }
+}
 async fn systemd_unit(method: &str) -> Result<()> {
     let unit = format!("network-lantern-helper@{}.service", unsafe {
         libc::geteuid()
@@ -322,9 +347,7 @@ async fn systemd_unit(method: &str) -> Result<()> {
                 &(unit, "replace"),
             )
             .await
-            .map_err(|e| {
-                HelperError::Authorization(format!("System helper authorization denied: {e}"))
-            })?;
+            .map_err(map_systemd_error)?;
         if reply.is_none() {
             return Err(HelperError::Protocol(
                 "System service manager returned no job".into(),
@@ -507,7 +530,7 @@ async fn serve(server: HelperServer, uid: u32) -> Result<()> {
                 let (stream,_)=accepted.map_err(|e|HelperError::transport("accept helper client",e))?;
                 if let Ok(permit)=slots.clone().try_acquire_owned(){
                     let service=service.clone();let stop=shutdown.child_token();
-                    tasks.spawn(async move {let _permit=permit;let _=serve_connection(service,stream,uid,stop).await;});
+                    tasks.spawn(async move {let _permit=permit;if let Err(error)=serve_connection(service,stream,uid,stop).await{eprintln!("helper connection error: {error}");}});
                 }
             }
         }

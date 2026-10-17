@@ -56,6 +56,15 @@ function Backup-NetworkTuningState {
   $manifest.Components['AfdParameters'] = $compAfd
   if (-not $compAfd) { $backupHadFailure = $true }
 
+  # Apply sets 'Do not use NLA' under Tcpip\QoS; record its value (or absence) so Restore can undo it.
+  Assert-NetworkTuningBackupWriteNamespace -BackupFolder $BackupFolder
+  $compTcpipQos = Invoke-NetworkTuningBackupArtifactPublication -BackupFolder $BackupFolder -FileName $script:NetworkTuningBackupFileTcpipQos -WriteTemporary {
+    param($temporaryPath)
+    Export-NetworkTuningRegistryKey -RegistryPath $script:NetworkTuningRegistryPathQos -OutFile $temporaryPath
+  }
+  $manifest.Components['TcpipQos'] = $compTcpipQos
+  if (-not $compTcpipQos) { $backupHadFailure = $true }
+
   Assert-NetworkTuningBackupWriteNamespace -BackupFolder $BackupFolder
   try {
     $policies = @(Get-NetworkTuningManagedQosPolicy -ErrorOnFailure)
@@ -85,9 +94,20 @@ function Backup-NetworkTuningState {
     $rows = @(
       foreach ($n in (Get-NetworkTuningPhysicalUpAdapter)) {
         Get-NetAdapterAdvancedProperty -Name $n.Name |
-          Select-Object @{ Name = 'Adapter'; Expression = { $n.Name } }, DisplayName, RegistryKeyword, DisplayValue, RegistryValue
+          Select-Object @{ Name = 'Adapter'; Expression = { $n.Name } }, DisplayName, RegistryKeyword, DisplayValue, @{ Name = 'RegistryValue'; Expression = { @($_.RegistryValue) -join ';' } }
       }
     )
+    # A keyword row without a registry value cannot be restored (and the restore validator
+    # rejects it), so leave it out instead of invalidating the whole backup.
+    $unrestorableRows = @($rows | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string]$_.RegistryKeyword) -and [string]::IsNullOrWhiteSpace([string]$_.RegistryValue)
+      })
+    if ($unrestorableRows.Count -gt 0) {
+      foreach ($unrestorableRow in $unrestorableRows) {
+        Write-Warning -Message ("Skipping NIC property '{0}' on adapter '{1}' in the backup: it has no registry value and cannot be restored." -f $unrestorableRow.RegistryKeyword, $unrestorableRow.Adapter)
+      }
+      $rows = @($rows | Where-Object { $unrestorableRows -notcontains $_ })
+    }
     if ($rows.Count -gt 0) {
       $nicPublished = Invoke-NetworkTuningBackupArtifactPublication -BackupFolder $BackupFolder -FileName $script:NetworkTuningBackupFileNicAdvanced -WriteTemporary {
         param($temporaryPath)
@@ -96,8 +116,9 @@ function Backup-NetworkTuningState {
       $manifest.Components['NicAdvanced'] = [bool]$nicPublished
       if (-not $nicPublished) { $backupHadFailure = $true }
     } else {
+      # No advanced properties (VM, Wi-Fi): a valid empty backup, nothing to restore.
+      Write-Verbose -Message 'No NIC advanced properties found; recording NicAdvanced as empty.'
       $manifest.Components['NicAdvanced'] = $false
-      $backupHadFailure = $true
     }
   } catch {
     Write-Warning -Message 'Could not back up your network adapter settings. NIC tuning will still be applied but cannot be automatically undone via Restore.'
@@ -116,8 +137,9 @@ function Backup-NetworkTuningState {
       $manifest.Components['NicRsc'] = [bool]$rscPublished
       if (-not $rscPublished) { $backupHadFailure = $true }
     } else {
+      # No RSC-capable adapters: a valid empty backup, nothing to restore.
+      Write-Verbose -Message 'No RSC rows found; recording NicRsc as empty.'
       $manifest.Components['NicRsc'] = $false
-      $backupHadFailure = $true
     }
   } catch {
     Write-Verbose -Message 'RSC snapshot failed.'

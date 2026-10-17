@@ -107,6 +107,10 @@ function Save-ProfileFromForm {
     $profilesPath = Get-ProfilesFileFromForm -Form $Form
     $p = Get-ParamHashFromRunTab -Form $Form
     $p['ProfilesFile'] = $profilesPath
+    # Quiet is passed once, explicitly. The form hash carries its own Quiet for run jobs.
+    $p.Remove('Quiet')
+    # A default output directory is not an operator choice and must not be stored.
+    if ($p['OutDir'] -eq (Get-NetworkThroughputDefaultParameterSet)['OutDir']) { $p.Remove('OutDir') }
     $null = Measure-NetworkThroughput @p -ProfileName $profileName -SaveProfile -WhatIf -PassThru -Quiet
     Update-ProfilesList -Form $Form
   }

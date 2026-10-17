@@ -22,11 +22,12 @@ pub fn merge_layers(
                 .iter()
                 .find(|candidate| candidate.eq_ignore_ascii_case(key))
             else {
-                let warning = format!("Unknown configuration key '{key}' ignored");
                 if strict {
-                    return Err(Error::validation(warning));
+                    return Err(Error::validation(format!(
+                        "Unknown configuration key '{key}' (rejected by --strict)"
+                    )));
                 }
-                warnings.push(warning);
+                warnings.push(format!("Unknown configuration key '{key}' ignored"));
                 continue;
             };
             merged.insert(canonical.clone(), value.clone());

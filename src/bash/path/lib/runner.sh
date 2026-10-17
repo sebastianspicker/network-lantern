@@ -7,6 +7,7 @@
 #   $2 - test type
 #   $3 - target host
 #   $4 - optional raw command output
+#   $5 - optional error text (first non-empty mtr stderr line)
 # Output/Returns:
 #   Prints a one-line JSON object with _failed:true to stdout
 append_failed_marker() {
@@ -14,17 +15,62 @@ append_failed_marker() {
   local type=$2
   local host=$3
   local raw_output=${4:-}
+  local error_text=${5:-}
+  local extra=""
+  if [[ -n "$error_text" ]]; then
+    extra=$(printf ',"_error":"%s"' "$(json_escape "$error_text")")
+  fi
   if [[ -n "$raw_output" ]]; then
-    printf '{"_failed":true,"round":"%s","type":"%s","host":"%s","raw_output":"%s"}\n' \
+    printf '{"_failed":true,"round":"%s","type":"%s","host":"%s"%s,"raw_output":"%s"}\n' \
       "$(json_escape "$round")" \
       "$(json_escape "$type")" \
       "$(json_escape "$host")" \
+      "$extra" \
       "$(json_escape "$raw_output")"
   else
-    printf '{"_failed":true,"round":"%s","type":"%s","host":"%s"}\n' \
+    printf '{"_failed":true,"round":"%s","type":"%s","host":"%s"%s}\n' \
       "$(json_escape "$round")" \
       "$(json_escape "$type")" \
-      "$(json_escape "$host")"
+      "$(json_escape "$host")" \
+      "$extra"
+  fi
+}
+
+# Print the first non-empty line of the captured mtr stderr (trimmed).
+_first_mtr_error_line() {
+  local line
+  [[ -s "${CURRENT_ERR:-}" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line=$(trim "$line")
+    if [[ -n "$line" ]]; then
+      printf '%s' "$line"
+      return 0
+    fi
+  done <"$CURRENT_ERR"
+  return 0
+}
+
+# Detect a privilege failure and, once per run, print a fix hint and stop probing.
+# Args:
+#   $1 - first mtr stderr line
+# Side effects:
+#   Sets ABORT_RUN=1 and prints one ERROR: hint to stderr the first time.
+_handle_mtr_permission_error() {
+  local error_text=$1
+  case "$error_text" in
+    *"Failure to open"* | *"Operation not permitted"* | *"Permission denied"*) ;;
+    *) return 0 ;;
+  esac
+  # shellcheck disable=SC2034
+  ABORT_RUN=1
+  if ((${PERMISSION_HINT_SHOWN:-0})); then
+    return 0
+  fi
+  PERMISSION_HINT_SHOWN=1
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "ERROR: mtr needs root: run with sudo, or make mtr-packet setuid root (Homebrew: sudo chown root \"\$(command -v mtr-packet)\" && sudo chmod 4755 \"\$(command -v mtr-packet)\")" >&2
+  else
+    echo "ERROR: mtr-packet needs CAP_NET_RAW: sudo setcap cap_net_raw+ep \"\$(command -v mtr-packet)\" or run with sudo" >&2
   fi
 }
 
@@ -50,7 +96,7 @@ _capture_mtr_with_deadline() {
   local timed_out=0
   local remaining_ticks=$((MTR_TIMEOUT_SECONDS * 2))
 
-  mtr "$@" -- "$host" >"$CURRENT_TMP" 2>>"$TABLE_LOG" &
+  mtr "$@" -- "$host" >"$CURRENT_TMP" 2>"$CURRENT_ERR" &
   mtr_pid=$!
   CURRENT_MTR_PID=$mtr_pid
 
@@ -72,6 +118,9 @@ _capture_mtr_with_deadline() {
   fi
   # shellcheck disable=SC2034
   CURRENT_MTR_PID=""
+  if [[ -s "$CURRENT_ERR" ]]; then
+    cat -- "$CURRENT_ERR" >>"$TABLE_LOG"
+  fi
   ((timed_out)) && return 124
   return "$mtr_status"
 }
@@ -109,21 +158,24 @@ _record_mtr_failure() {
   local type=$2
   local host=$3
   local mtr_status=$4
-  local raw_output
+  local raw_output error_text
 
   raw_output=$(_read_current_mtr_output)
-  append_failed_marker "$round" "$type" "$host" "$raw_output" >>"$JSON_LOG"
+  error_text=$(_first_mtr_error_line)
+  append_failed_marker "$round" "$type" "$host" "$raw_output" "$error_text" >>"$JSON_LOG"
   ((RUN_FAIL++)) || true
   if ((mtr_status == 124)); then
     log_line FAIL "round=$round type=$type host=$host (timeout after ${MTR_TIMEOUT_SECONDS}s)"
   else
     log_line FAIL "round=$round type=$type host=$host (exit=$mtr_status)"
   fi
+  _handle_mtr_permission_error "$error_text"
 }
 
 _cleanup_current_run() {
-  rm -f -- "$CURRENT_TMP"
+  rm -f -- "$CURRENT_TMP" "$CURRENT_ERR"
   CURRENT_TMP=""
+  CURRENT_ERR=""
 }
 
 # Run a single MTR test, log results, and update counters.
@@ -160,6 +212,7 @@ execute_single_run() {
   fi
 
   CURRENT_TMP=$(mktemp "${TMPDIR:-/tmp}/mtr-suite.XXXXXXXX")
+  CURRENT_ERR=$(mktemp "${TMPDIR:-/tmp}/mtr-suite-err.XXXXXXXX")
   local mtr_status=0
   if _capture_mtr_with_deadline "$host" "${local_mtr_args[@]}" "${local_extra_args[@]}"; then
     :

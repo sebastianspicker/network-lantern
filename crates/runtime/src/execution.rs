@@ -46,13 +46,47 @@ pub async fn execute_request_with_exit_code(
     code: &std::sync::atomic::AtomicU8,
 ) -> Result<(Value, u8)> {
     let preview = plan_request(value)?;
+    precheck(&request(value)?, &preview)?;
     let handle = manager.begin(count(&preview))?;
     execute_prepared_with_exit_code(value, out, handle, cancel, code).await
 }
 
 pub fn reserve_request(value: &Value, manager: &RunManager) -> Result<crate::manager::RunHandle> {
     let preview = plan_request(value)?;
+    precheck(&request(value)?, &preview)?;
     manager.begin(count(&preview))
+}
+
+/// Rejects requests that must not create a run: changed reviewed plans and unsupported hosts.
+fn precheck(req: &Request, preview: &Value) -> Result<()> {
+    let reviewed = preview["authorization"]["reviewed_operation_hash"].as_str();
+    match (&req.expected_operation_hash, reviewed) {
+        (Some(_), None) => {
+            return Err(Error::validation(
+                "A reviewed operation hash applies only to tuning plans",
+            ));
+        }
+        (Some(expected), Some(reviewed)) if !expected.eq_ignore_ascii_case(reviewed) => {
+            return Err(Error::validation("Plan changed since it was reviewed"));
+        }
+        (None, Some(_)) if cfg!(windows) => {
+            return Err(Error::validation(
+                "Tuning execution requires the reviewed_operation_hash from the plan preview \
+                 (CLI: --expect-hash <HASH> from --dry-run)",
+            ));
+        }
+        _ => {}
+    }
+    let tuning_step = preview["steps"]
+        .as_array()
+        .is_some_and(|steps| steps.iter().any(|step| step["capability"] == "tuning"));
+    if (req.capability == Capability::Tuning || tuning_step) && !cfg!(windows) {
+        return Err(Error::validation(format!(
+            "Windows tuning cannot run on {}; no run was created",
+            std::env::consts::OS
+        )));
+    }
+    Ok(())
 }
 
 pub async fn execute_prepared(
@@ -80,6 +114,7 @@ async fn execute_prepared_with_exit_code(
 ) -> Result<(Value, u8)> {
     let preview = plan_request(value)?;
     let req = request(value)?;
+    precheck(&req, &preview)?;
     let total = count(&preview);
     let run_id = handle.run_id.clone();
     let started = now();
@@ -89,6 +124,13 @@ async fn execute_prepared_with_exit_code(
     let _lock = lantern_platform::SidecarLock::acquire(&lock_path, std::time::Duration::ZERO)?;
     std::fs::create_dir_all(&root)?;
     lantern_platform::check_path(&root)?;
+    let run_log = (log::max_level() != log::LevelFilter::Off)
+        .then(|| crate::run_log::RunLog::open(&root.join("run.log")));
+    log::info!(
+        "run {run_id} accepted: capability={} strict={} planned={total}",
+        req.capability.as_str(),
+        req.strict
+    );
     let engine_cancel = handle.cancel.clone();
     if cancel.is_cancelled() {
         engine_cancel.cancel();
@@ -108,7 +150,10 @@ async fn execute_prepared_with_exit_code(
         failed: 0,
         skipped: 0,
         threshold_breaches: 0,
+        degraded: 0,
         warnings: Vec::new(),
+        omitted_warnings: 0,
+        seen_warnings: Default::default(),
     };
     let result = execution.run(&req, &preview).await;
     relay.abort();
@@ -125,16 +170,21 @@ async fn execute_prepared_with_exit_code(
         } else {
             exit::TOTAL_FAILURE
         }
-    } else if execution.threshold_breaches > 0 {
+    } else if execution.threshold_breaches > 0 || execution.degraded > 0 {
         exit::PARTIAL_FAILURE
     } else {
         exit::SUCCESS
     };
     let code = exit::for_capability(req.capability == Capability::Throughput, code);
     if let Err(error) = result {
+        log::error!("run {run_id} stopped: {}", error.message);
         handle.progress(execution.completed, Some(&error.message));
-        execution.warnings.push(error.message);
+        // The error that stopped the run is never folded into the "… N more" line.
+        if execution.seen_warnings.insert(error.message.clone()) {
+            execution.warnings.push(error.message);
+        }
     }
+    execution.finish_warnings();
     let status = if cancelled {
         "Cancelled"
     } else if code == exit::SUCCESS {
@@ -166,11 +216,20 @@ async fn execute_prepared_with_exit_code(
     })
     .map_err(internal)?;
     let path = root.join("summary.json");
+    log::info!(
+        "run {run_id} finished: status={status} exit_code={code} completed={} failed={}",
+        execution.completed,
+        execution.failed
+    );
     if let Err(error) = atomic_json(&path, &summary, REPORT_LIMIT) {
+        log::error!("run {run_id} summary write failed: {error}");
+        drop(run_log);
         handle.finish(exit::INTERNAL, None);
         return Err(error);
     }
     let summary_path = path.to_string_lossy().to_string();
+    // Stop mirroring before the manager admits the next run.
+    drop(run_log);
     handle.finish_outcome(code, Some(summary_path), status == "PartialFailure");
     Ok((summary, code))
 }
@@ -183,14 +242,93 @@ struct Execution<'a> {
     failed: u64,
     skipped: u64,
     threshold_breaches: u64,
+    /// Measurements with failed stages that still produced reachability data.
+    degraded: u64,
     warnings: Vec<String>,
+    omitted_warnings: u64,
+    seen_warnings: std::collections::HashSet<String>,
 }
+/// Failure reasons from the serialized shapes of failed measurements, labelled by host or test.
+fn failure_messages(value: &Value) -> Vec<String> {
+    let label = value["host"]
+        .as_str()
+        .or_else(|| value["item"]["host"].as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            value["spec"]["target"]
+                .as_str()
+                .map(|t| format!("{t} test {}", value["spec"]["id"]))
+        })
+        .unwrap_or_else(|| "measurement".into());
+    let mut messages = Vec::new();
+    for stage in value["stage_errors"].as_array().into_iter().flatten() {
+        if let Some(message) = stage["message"].as_str() {
+            let name = stage["stage"].as_str().unwrap_or("stage");
+            messages.push(format!("{label}: {name}: {message}"));
+        }
+    }
+    for error in value["errors"].as_array().into_iter().flatten() {
+        if let Some(message) = error.as_str() {
+            messages.push(format!("{label}: {message}"));
+        }
+    }
+    match &value["error"] {
+        Value::String(message) => messages.push(format!("{label}: {message}")),
+        Value::Object(error) => {
+            if let Some(message) = error.get("message").and_then(Value::as_str) {
+                messages.push(format!("{label}: {message}"));
+            }
+        }
+        _ => {}
+    }
+    if messages.is_empty() {
+        messages.push(format!(
+            "{label}: measurement failed without a recorded reason"
+        ));
+    }
+    messages
+}
+const WARNING_CAP: usize = 20;
 impl Execution<'_> {
+    /// Adds a deduplicated warning; entries past the cap are counted for a final summary line.
+    fn warn(&mut self, message: String) {
+        if !self.seen_warnings.insert(message.clone()) {
+            return;
+        }
+        log::warn!("{message}");
+        if self.warnings.len() >= WARNING_CAP {
+            self.omitted_warnings += 1;
+        } else {
+            self.warnings.push(message);
+        }
+    }
+    /// Counts a partly failed measurement and surfaces its stage errors.
+    fn degrade(&mut self, value: &Value) {
+        self.degraded += 1;
+        for message in failure_messages(value) {
+            self.warn(message);
+        }
+    }
+    fn finish_warnings(&mut self) {
+        if self.omitted_warnings > 0 {
+            self.warnings
+                .push(format!("… {} more", self.omitted_warnings));
+            self.omitted_warnings = 0;
+        }
+    }
     async fn record(&mut self, value: Value, failed: bool) -> Result<()> {
         self.completed += 1;
         if failed {
             self.failed += 1;
+            for message in failure_messages(&value) {
+                self.warn(message);
+            }
         }
+        log::info!(
+            "measurement {} finished: {}",
+            self.completed,
+            if failed { "failed" } else { "ok" }
+        );
         atomic_json(
             &self
                 .root
@@ -254,6 +392,11 @@ impl Execution<'_> {
                             self.skipped += 1;
                             continue;
                         }
+                        log::debug!(
+                            "measurement {} start: throughput test {}",
+                            self.completed + 1,
+                            spec.id
+                        );
                         match self
                             .native
                             .throughput(&client, &spec, &plan.config, self.cancel)
@@ -299,12 +442,27 @@ impl Execution<'_> {
                             if self.cancel.is_cancelled() {
                                 break;
                             }
+                            log::debug!(
+                                "measurement {} start: path basic {}",
+                                self.completed + 1,
+                                item.host
+                            );
                             match self.native.basic(&item, &settings, self.cancel).await {
                                 Ok(result) => {
-                                    let failed = result.status
+                                    let degraded = result.status
                                         != lantern_path_basic::BasicRunStatus::Completed
                                         || !result.failed_stages.is_empty();
-                                    self.record(json!(result), failed).await?;
+                                    // Failed only when no stage reached the target at all.
+                                    let reachable =
+                                        result.ping.iter().any(|sample| {
+                                            sample.status == lantern_path_io::SampleStatus::Reply
+                                        }) || result.trace.iter().any(|hop| hop.address.is_some())
+                                            || result.tcp_443_ok;
+                                    let value = json!(result);
+                                    if degraded && reachable {
+                                        self.degrade(&value);
+                                    }
+                                    self.record(value, degraded && !reachable).await?;
                                 }
                                 Err(error) => {
                                     self.record(
@@ -321,13 +479,23 @@ impl Execution<'_> {
                             if self.cancel.is_cancelled() {
                                 break;
                             }
+                            log::debug!(
+                                "measurement {} start: path trace {}",
+                                self.completed + 1,
+                                item.host
+                            );
                             match self.native.trace(&item, &settings, self.cancel).await {
                                 Ok(result) => {
-                                    let failed = result.status
-                                        != lantern_path_trace::TraceRunStatus::Completed
-                                        || result.hops.is_empty()
+                                    let failed = result.hops.is_empty()
                                         || result.hops.iter().all(|h| h.statistics.received == 0);
-                                    self.record(json!(result), failed).await?;
+                                    let value = json!(result);
+                                    if !failed
+                                        && result.status
+                                            != lantern_path_trace::TraceRunStatus::Completed
+                                    {
+                                        self.degrade(&value);
+                                    }
+                                    self.record(value, failed).await?;
                                 }
                                 Err(error) => {
                                     self.record(
@@ -378,6 +546,7 @@ impl Execution<'_> {
                             layers: vec![layer],
                             strict: true,
                             workflow: None,
+                            expected_operation_hash: None,
                         };
                         self.run(&sub, step).await?;
                     }
@@ -391,6 +560,87 @@ impl Execution<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_measurements_surface_their_reasons_as_capped_unique_warnings() {
+        let failed = json!({
+            "host":"host.invalid","status":"Failed","failed_stages":["Ping"],
+            "stage_errors":[{"stage":"Ping","message":"native open raw ICMP socket requires permission: Operation not permitted"}]
+        });
+        assert_eq!(
+            failure_messages(&failed),
+            [
+                "host.invalid: Ping: native open raw ICMP socket requires permission: Operation not permitted"
+            ]
+        );
+        assert_eq!(
+            failure_messages(&json!({"host":"h","errors":["no route"]})),
+            ["h: no route"]
+        );
+        assert_eq!(
+            failure_messages(&json!({"item":{"host":"h"},"error":"boom"})),
+            ["h: boom"]
+        );
+        assert_eq!(
+            failure_messages(
+                &json!({"spec":{"id":3,"target":"t"},"error":{"category":"Connectivity","message":"refused"}})
+            ),
+            ["t test 3: refused"]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let manager = RunManager::default();
+        let handle = manager.begin(30).unwrap();
+        let mut execution = Execution {
+            native: crate::native::NativeExecution::new(&handle.run_id)
+                .await
+                .unwrap(),
+            handle: &handle,
+            root: &root,
+            cancel: &handle.cancel,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            threshold_breaches: 0,
+            degraded: 0,
+            warnings: Vec::new(),
+            omitted_warnings: 0,
+            seen_warnings: Default::default(),
+        };
+        execution.record(failed.clone(), true).await.unwrap();
+        execution.record(failed, true).await.unwrap();
+        for index in 0..25 {
+            let value = json!({"host":format!("h{index}"),"errors":["down"]});
+            execution.record(value, true).await.unwrap();
+        }
+        assert_eq!(execution.failed, 27);
+        execution.finish_warnings();
+        assert_eq!(execution.warnings.len(), 21);
+        assert_eq!(execution.warnings[20], "… 6 more");
+        assert!(execution.warnings[0].starts_with("host.invalid: Ping: native open raw ICMP"));
+    }
+    #[tokio::test]
+    async fn tuning_and_changed_plans_are_rejected_before_a_run_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let tuning = json!({"capability":"tuning","layers":[{}]});
+        let manager = RunManager::default();
+        if !cfg!(windows) {
+            let error = reserve_request(&tuning, &manager).err().unwrap();
+            assert!(error.message.contains("Windows tuning cannot run on"));
+        }
+        let mut stale = tuning.clone();
+        stale["expected_operation_hash"] = json!("0000");
+        let error = reserve_request(&stale, &manager).err().unwrap();
+        assert_eq!(error.message, "Plan changed since it was reviewed");
+        let cancel = CancellationToken::new();
+        let code = std::sync::atomic::AtomicU8::new(130);
+        execute_request_with_exit_code(&tuning, &root, &manager, &cancel, &code)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    }
 
     #[tokio::test]
     async fn signal_reason_matches_partial_summary() {

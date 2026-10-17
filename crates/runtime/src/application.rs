@@ -14,25 +14,66 @@ pub async fn doctor() -> Value {
     let helper = helper_operation("status")
         .await
         .unwrap_or_else(|e| json!({"error":e}));
+    let helper_ready =
+        helper["service_reachable"].as_bool() == Some(true) && helper["authorized"] == true;
+    let access = lantern_path_io::native_access();
     let tuning_reason = if cfg!(windows) {
         "Windows native providers; mutations require the registered helper and a verified backup"
     } else {
         "Windows tuning requires a Windows host; plans and saved recovery records remain readable"
     };
+    let mut capabilities = socket_capabilities(&access, helper_ready);
+    capabilities["tuning"] = json!({"available":cfg!(windows),"reason":tuning_reason});
     json!({
         "application":"network-lantern","version":env!("CARGO_PKG_VERSION"),
         "os":std::env::consts::OS,"architecture":std::env::consts::ARCH,
         "engines":{"throughput":"native iperf3 protocol","path_basic":"native sockets","path_trace":"native sockets"},
         "helper":helper,
-        "capabilities":{
-            "throughput":{"available":true,
-                "permission":"Native ICMP preflight may require helper authorization; explicit skip controls support TCP-only networks"},
-            "path_basic":{"available":true,"permission":"Native ICMP sockets; platform authorization may be required"},
-            "path_trace":{"available":true,
-                "permission":"Raw ICMP/UDP/TCP requires platform helper authorization where sockets are restricted"},
-            "tuning":{"available":cfg!(windows),"reason":tuning_reason}
-        },
+        "native_access":access,
+        "capabilities":capabilities,
         "probes_performed":false
+    })
+}
+/// Path and throughput readiness from the sockets this process can open (no packets sent).
+fn socket_capabilities(access: &lantern_path_io::NativeAccess, helper_ready: bool) -> Value {
+    let raw = access.raw_icmpv4 || access.raw_icmpv6;
+    let datagram = access.datagram_icmpv4 || access.datagram_icmpv6;
+    let icmp = raw || datagram || helper_ready;
+    let icmp_mode = if helper_ready {
+        "ICMP through the authorized helper"
+    } else if raw {
+        "raw ICMP sockets"
+    } else if datagram {
+        "unprivileged ICMP datagram sockets (no root needed)"
+    } else {
+        "no ICMP socket access: run with sudo, register the helper, or on Linux allow \
+         unprivileged ICMP via the net.ipv4.ping_group_range sysctl"
+    };
+    let tcp_trace = match access.tcp_trace_mode {
+        lantern_path_io::TcpTraceMode::Raw => "TCP traces send raw SYN probes",
+        lantern_path_io::TcpTraceMode::Connect => {
+            "TCP traces use connect(): the destination sees a completed handshake followed by RST"
+        }
+    };
+    let mut trace_notes = vec![tcp_trace];
+    if access.windows_tcp_intermediate_hops == Some(false) {
+        trace_notes.push("TCP traces see only the destination without administrator rights");
+    }
+    if !access.traffic_class_supported {
+        trace_notes.push("TOS/traffic-class rounds are not applied on this platform");
+    }
+    let throughput = if icmp {
+        "ICMP reachability preflight available".to_string()
+    } else {
+        format!(
+            "ICMP preflight unavailable ({icmp_mode}); live runs need sudo, the helper, or \
+             {{\"skip_reachability_check\":true,\"disable_mtu_probe\":true}}"
+        )
+    };
+    json!({
+        "throughput":{"available":true,"permission":throughput},
+        "path_basic":{"available":icmp,"permission":icmp_mode},
+        "path_trace":{"available":icmp,"permission":icmp_mode,"notes":trace_notes},
     })
 }
 pub async fn helper_operation(operation: &str) -> Result<Value> {
@@ -121,6 +162,15 @@ pub(crate) fn throughput(
     Ok((plan, warnings, thresholds))
 }
 pub fn plan_request(value: &Value) -> Result<Value> {
+    let plan = build_plan(value)?;
+    log::debug!(
+        "plan built: capability={} items={}",
+        plan["capability"].as_str().unwrap_or("?"),
+        count(&plan)
+    );
+    Ok(plan)
+}
+fn build_plan(value: &Value) -> Result<Value> {
     let req = request(value)?;
     match req.capability {
         Capability::Throughput => {
@@ -130,7 +180,7 @@ pub fn plan_request(value: &Value) -> Result<Value> {
             )
         }
         Capability::PathBasic | Capability::PathTrace => {
-            let (config, warnings) = path_config::resolve(
+            let (config, mut warnings) = path_config::resolve(
                 &req.layers,
                 req.strict,
                 req.capability == Capability::PathTrace,
@@ -138,7 +188,9 @@ pub fn plan_request(value: &Value) -> Result<Value> {
             let plan = if req.capability == Capability::PathBasic {
                 serde_json::to_value(config.basic()?.0).unwrap()
             } else {
-                serde_json::to_value(config.trace()?.0).unwrap()
+                let plan = config.trace()?.0;
+                warnings.extend(plan.warnings.iter().cloned());
+                serde_json::to_value(plan).unwrap()
             };
             Ok(json!({
                 "capability":req.capability.as_str(),"plan":plan,"settings":config,"warnings":warnings,
@@ -162,15 +214,30 @@ pub fn plan_request(value: &Value) -> Result<Value> {
                 req.strict,
             )?;
             let mut steps = Vec::new();
+            let mut warnings = plan.warnings.clone();
             for step in &plan.steps {
-                steps.push(plan_request(&step_request(step, req.strict))?);
+                let step = plan_request(&step_request(step, req.strict))?;
+                for warning in step["warnings"].as_array().into_iter().flatten() {
+                    if let Some(text) = warning.as_str()
+                        && !warnings.iter().any(|known| known == text)
+                    {
+                        warnings.push(text.to_owned());
+                    }
+                }
+                steps.push(step);
             }
             Ok(
-                json!({"capability":"workflow","workflow":plan.workflow,"steps":steps,"warnings":plan.warnings}),
+                json!({"capability":"workflow","workflow":plan.workflow,"steps":steps,"warnings":warnings}),
             )
         }
         Capability::Tuning => {
-            let (plan, warnings, hash) = tuning(&req.layers, req.strict)?;
+            let (plan, mut warnings, hash) = tuning(&req.layers, req.strict)?;
+            if !cfg!(windows) {
+                warnings.push(format!(
+                    "Windows tuning cannot run on {}; this plan is for review only",
+                    std::env::consts::OS
+                ));
+            }
             Ok(json!({
                 "capability":"tuning","settings":plan.config,"plan":plan,"warnings":warnings,
                 "authorization":{"reviewed_operation_hash":hash},"total_items":1,"platform":"windows"
@@ -288,6 +355,56 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn doctor_reports_socket_access_instead_of_assuming_it() {
+        let mut access = lantern_path_io::NativeAccess {
+            raw_icmpv4: false,
+            raw_icmpv6: false,
+            datagram_icmpv4: false,
+            datagram_icmpv6: false,
+            raw_ip_sender: false,
+            tcp_trace_mode: lantern_path_io::TcpTraceMode::Connect,
+            elevated: None,
+            windows_tcp_intermediate_hops: None,
+            traffic_class_supported: true,
+        };
+        let none = socket_capabilities(&access, false);
+        assert_eq!(none["path_basic"]["available"], false);
+        assert!(
+            none["path_basic"]["permission"]
+                .as_str()
+                .unwrap()
+                .contains("sudo")
+        );
+        assert!(
+            none["throughput"]["permission"]
+                .as_str()
+                .unwrap()
+                .contains("skip_reachability_check")
+        );
+        assert_eq!(
+            socket_capabilities(&access, true)["path_trace"]["available"],
+            true
+        );
+        access.datagram_icmpv4 = true;
+        let datagram = socket_capabilities(&access, false);
+        assert_eq!(datagram["path_basic"]["available"], true);
+        assert!(
+            datagram["path_basic"]["permission"]
+                .as_str()
+                .unwrap()
+                .contains("no root")
+        );
+    }
+    #[test]
+    fn tuning_plan_warns_when_not_on_windows() {
+        let plan = plan_request(&json!({"capability":"tuning","layers":[{}]})).unwrap();
+        let warned = plan["warnings"].as_array().unwrap().iter().any(|w| {
+            w.as_str()
+                .is_some_and(|w| w.contains("Windows tuning cannot run on"))
+        });
+        assert_eq!(warned, !cfg!(windows));
     }
     #[test]
     fn profile_capability_mismatch_is_rejected_before_planning() {

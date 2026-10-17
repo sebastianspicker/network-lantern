@@ -354,7 +354,8 @@ function Invoke-Iperf3NativeProcess {
     [AllowEmptyCollection()]
     [string[]]$Arguments,
     [Parameter(Mandatory)]
-    [ValidateRange(1, 3660000)]
+    # Largest generated timeout: (Duration 3600 + Omit 60 + Iperf3ProcessTimeoutBufferSec 30) seconds.
+    [ValidateRange(1, 3690000)]
     [int]$TimeoutMs,
     [ValidateRange(1, 30000)]
     [int]$TerminationGracePeriodMs = 5000,

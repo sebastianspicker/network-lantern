@@ -6,6 +6,7 @@ function Get-NetworkTuningBackupArtifactFileMap {
   return @{
     SystemProfile = @($script:NetworkTuningBackupFileSystemProfile)
     AfdParameters = @($script:NetworkTuningBackupFileAfdParameters)
+    TcpipQos      = @($script:NetworkTuningBackupFileTcpipQos)
     QosPolicies  = @($script:NetworkTuningBackupFileQosOurs)
     NicAdvanced  = @($script:NetworkTuningBackupFileNicAdvanced)
     NicRsc        = @($script:NetworkTuningBackupFileRsc)
@@ -37,6 +38,7 @@ function Get-NetworkTuningBackupArtifactMaximumBytes {
   switch ($FileName) {
     $script:NetworkTuningBackupFileSystemProfile { return [long]$script:NetworkTuningMaxRegistryBackupBytes }
     $script:NetworkTuningBackupFileAfdParameters { return [long]$script:NetworkTuningMaxRegistryBackupBytes }
+    $script:NetworkTuningBackupFileTcpipQos { return [long]$script:NetworkTuningMaxRegistryBackupBytes }
     $script:NetworkTuningBackupFileQosOurs { return [long]$script:NetworkTuningMaxQosBackupBytes }
     $script:NetworkTuningBackupFileNicAdvanced { return [long]$script:NetworkTuningMaxCsvBackupBytes }
     $script:NetworkTuningBackupFileRsc { return [long]$script:NetworkTuningMaxCsvBackupBytes }

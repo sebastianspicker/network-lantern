@@ -8,7 +8,8 @@ two implementations of the same capabilities, with a fixed relationship:
   application under development. New behavior belongs there. See
   [Rust application boundaries](#rust-application-boundaries).
 - The **PowerShell and Bash implementation** (`Invoke-NetworkLantern.ps1`,
-  `apps/`, `src/`) is the behavior reference. It stays runnable and tested, and it
+  `apps/`, `src/`) is the behavior reference. It stays runnable and is tested by the
+  private test suite (not published in this repository), and it
   is changed only for fixes, until the
   [archive trigger](#legacy-reference-and-archive-trigger) is met.
 
@@ -54,7 +55,7 @@ flowchart LR
     Site -. generates commands only .-> Operator
 ```
 
-The browser planner is isolated from execution. Repository tests prohibit browser
+The browser planner is isolated from execution. The private test suite prohibits browser
 networking and persistence APIs in `site/`, so the planner only renders dry-run
 commands from in-memory input. `planner.js` owns pure validation and command and
 step construction; `app.js` owns field state, accessible workflow navigation, and
@@ -293,7 +294,7 @@ There is no compile or packaging stage for the legacy tools. Operator adapters
 and modules run from the checkout; the private throughput reader is compiled once
 per PowerShell process when loaded. CI runs the cross-shell gate on Ubuntu and the
 PowerShell gate on Windows. Node.js 22+ is a development-only prerequisite for the
-static planner tests. The static planner is served as ordinary files, and
+private static planner tests. The static planner is served as ordinary files, and
 `.github/workflows/pages.yml` publishes `site/` to GitHub Pages.
 
 ## Invariants and extension points
@@ -454,7 +455,7 @@ at risk for code that is scheduled for removal:
   codes, and profile-name validation.
 - Workflow parameter names and defaults are repeated in `Invoke-NetworkLantern.ps1`,
   the workflow plan module, and the descriptor table in
-  `apps/workflow/Private/WorkflowApplication.ps1`. The architecture test checks
+  `apps/workflow/Private/WorkflowApplication.ps1`. The private architecture test checks
   only that the root adapter and plan module parameters agree.
 
 ## Repository layout
