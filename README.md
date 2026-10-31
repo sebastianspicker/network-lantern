@@ -92,6 +92,28 @@ pwsh -NoProfile -NonInteractive -File .\scripts\Test-Prerequisites.ps1
 Add `-IncludeIperf3` when preparing a throughput host. The script checks that
 `iperf3` is on `PATH`; the live command enforces the minimum version.
 
+## Try the Rust CLI
+
+The Rust CLI is where new behavior is built, and it is the surface to start with
+when testing this alpha. It needs rustup and the pinned Rust 1.96.0 toolchain; if
+`cargo --version` reports another version, see
+[Local CLI](docs/RUST.md#local-cli). From the repository root:
+
+```sh
+cargo build --release --locked -p network-lantern
+./target/release/network-lantern doctor
+./target/release/network-lantern path basic --target example.com --dry-run
+./target/release/network-lantern throughput --target iperf3.example.net --single-test --dry-run
+```
+
+`doctor` sends no packets; it reports which sockets the CLI can open and whether
+live path and throughput runs can work. A command without `--dry-run` sends real
+traffic, so use only targets you are authorized to test. Live runs need no root
+on macOS, or on Linux hosts that allow unprivileged ICMP; otherwise see
+[Native socket access](docs/RUST.md#native-socket-access). Add `-v` to log
+diagnostic detail, and attach the files listed in
+[Diagnostic logs](docs/RUST.md#diagnostic-logs) to bug reports.
+
 ## Try it without touching the network
 
 Keep the checkout layout intact, because the adapters load repository-relative

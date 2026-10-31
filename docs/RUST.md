@@ -198,9 +198,10 @@ bug reports.
 ## Verification
 
 `./scripts/ci-local.sh` includes the legacy gate and `scripts/ci-rust.sh`. The Rust
-phase checks formatting, Clippy, workspace tests, CLI and desktop builds,
-TypeScript, and frontend tests. The separate Rust CI workflow configures Windows,
-Ubuntu 22.04, and both macOS architectures. Its configured jobs are not proof that
+phase checks formatting, Clippy, the inline workspace unit tests, CLI and desktop
+builds, and the TypeScript type check; the frontend test suites are private. The
+separate Rust CI workflow configures Windows, Ubuntu 22.04, and both macOS
+architectures. Its configured jobs are not proof that
 remote CI has passed.
 
 ## Desktop and authorization
