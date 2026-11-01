@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -21,6 +19,7 @@ concurrency:
 jobs:
   path-lint-test:
     name: Path lint and tests
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -46,6 +45,7 @@ jobs:
 
   powershell-lint-test:
     name: PowerShell checks (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:

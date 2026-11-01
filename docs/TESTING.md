@@ -144,8 +144,10 @@ writes the profile, and `-DeleteProfile` changes the selected store.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pushes to `main`, pull requests targeting
-`main`, and manual dispatch.
+`.github/workflows/ci.yml` runs automatically for Dependabot-authored pull requests
+targeting `main`, and also supports manual dispatch. The Rust migration workflow
+uses the same policy. Security scans may run on other pull requests, pushes and
+a weekly schedule.
 
 - `path-lint-test` (displayed as "Path lint and tests") runs
   `scripts/ci-legacy.sh`, the legacy half of the gate, on Ubuntu. The job keeps
@@ -157,7 +159,8 @@ The workflow pins third-party actions by commit and caches PSScriptAnalyzer
 
 `.github/workflows/rust.yml` runs the steps of `scripts/ci-rust.sh` on Ubuntu,
 Windows, and both macOS architectures.
-`.github/workflows/pages.yml` publishes `site/` to GitHub Pages. Neither workflow's configuration proves that remote CI has passed.
+`.github/workflows/pages.yml` publishes `site/` to GitHub Pages only after manual
+dispatch from `main`; pushes and pull requests do not deploy. Neither workflow's configuration proves that remote CI has passed.
 
 ## What the checks cover
 

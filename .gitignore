@@ -168,3 +168,9 @@ Thumbs.db
 /desktop/scripts/run-native.mjs
 /desktop/scripts/native-environment.mjs
 /desktop/scripts/build-native.mjs
+
+# Private local test tooling and maintenance work
+/desktop/.local-tests/
+/.scratch*/
+/ALPHA_AUDIT_REPORT.md
+/THINGS_TO_DO_LEDGER.md

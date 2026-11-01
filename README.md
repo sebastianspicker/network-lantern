@@ -17,14 +17,25 @@ locally: there is no hosted service, remote API, installer, container image, or
 published package. Clone the repository and run the tools on the host you are
 diagnosing.
 
-> [!NOTE]
-> This is an early alpha. `VERSION` reads `0.1.0-alpha.1`, and there is no
-> release tag yet. Public parameters, module exports, profiles, result schemas,
-> and paths can change before a stable release.
+<details>
+<summary>Status and limitations</summary>
+
+Network Lantern is an independent experimental project for collecting network evidence and
+exploring a limited set of Windows settings. Developed independently alongside my main
+professional work. It remains an early alpha: `VERSION` is `0.1.0-alpha.1`, with no release
+tag. Public parameters, exports, profiles, result schemas and paths may change, and the source
+tooling requires adaptation and validation for the target host.
+
+**Disclaimer.** Run probes only on networks and endpoints you are authorized to test.
+Throughput loads and configuration changes can affect service. Review previews, retain
+configuration backups and keep an independent recovery method before applying tuning; you are
+responsible for operations.
+
+</details>
 
 ## What it does
 
-Network Lantern is four independent diagnostic capabilities plus a planner:
+Network Lantern provides three diagnostic capabilities plus a planner:
 
 - **Path** traces reachability and routing.
   - Windows: `ping`, `tracert`, optional `pathping`, and a TCP 443 check.
@@ -57,8 +68,7 @@ page.
 A live copy is published to GitHub Pages by
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) at
 <https://sebastianspicker.github.io/network-lantern/>. Enable Pages once with the
-GitHub Actions source in the repository settings; the workflow deploys on pushes
-that touch `site/`. Run the planner locally with:
+GitHub Actions source in the repository settings; start the workflow manually from `main` when a deployment is intended. Run the planner locally with:
 
 ```bash
 python3 -m http.server 8000 --bind 127.0.0.1 --directory site

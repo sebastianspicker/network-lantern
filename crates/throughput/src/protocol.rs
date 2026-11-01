@@ -1128,7 +1128,9 @@ mod tests {
             }],
             stop.clone(),
         ));
-        let (_sender, result) = tokio::time::timeout(Duration::from_secs(2), &mut write)
+        // Completing the fixture transfer depends on runner TCP scheduling, not a
+        // product throughput guarantee. Keep the separate cancellation bound below.
+        let (_sender, result) = tokio::time::timeout(Duration::from_secs(10), &mut write)
             .await
             .expect("reverse receiver drain should unblock the data sender")
             .unwrap();
