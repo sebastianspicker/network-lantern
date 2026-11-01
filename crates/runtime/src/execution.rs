@@ -89,17 +89,26 @@ fn precheck(req: &Request, preview: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Whether any stage reached the target itself; a router answering a trace hop does not count.
+fn basic_reached_target(result: &lantern_path_basic::BasicRunResult) -> bool {
+    result
+        .ping
+        .iter()
+        .any(|sample| sample.status == lantern_path_io::SampleStatus::Reply)
+        || result.trace.iter().any(|hop| hop.reached_destination)
+        || result.tcp_443_ok
+}
+
 pub async fn execute_prepared(
     value: &Value,
     out: &Path,
     handle: crate::manager::RunHandle,
-    cancel: &CancellationToken,
 ) -> Result<(Value, u8)> {
     execute_prepared_with_exit_code(
         value,
         out,
         handle,
-        cancel,
+        &CancellationToken::new(),
         &std::sync::atomic::AtomicU8::new(exit::CANCELLED),
     )
     .await
@@ -453,11 +462,7 @@ impl Execution<'_> {
                                         != lantern_path_basic::BasicRunStatus::Completed
                                         || !result.failed_stages.is_empty();
                                     // Failed only when no stage reached the target at all.
-                                    let reachable =
-                                        result.ping.iter().any(|sample| {
-                                            sample.status == lantern_path_io::SampleStatus::Reply
-                                        }) || result.trace.iter().any(|hop| hop.address.is_some())
-                                            || result.tcp_443_ok;
+                                    let reachable = basic_reached_target(&result);
                                     let value = json!(result);
                                     if degraded && reachable {
                                         self.degrade(&value);
@@ -664,5 +669,53 @@ mod tests {
         assert_eq!(summary["exit_code"], 143);
         assert_eq!(summary["status"], "Cancelled");
         assert_eq!(summary["counts"]["total"], 0);
+    }
+
+    #[test]
+    fn workflow_tuning_plan_is_pinned_by_the_reviewed_hash() {
+        let request = json!({"capability":"workflow","workflow":"windows_tuning","layers":[{}]});
+        let plan = plan_request(&request).unwrap();
+        assert!(plan["authorization"].is_object());
+        assert_eq!(plan["authorization"], plan["steps"][0]["authorization"]);
+        let mut wrong = request.clone();
+        wrong["expected_operation_hash"] = json!("0".repeat(64));
+        let error = reserve_request(&wrong, &RunManager::default())
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("Plan changed since it was reviewed")
+        );
+        if !cfg!(windows) {
+            let mut right = request;
+            right["expected_operation_hash"] =
+                plan["authorization"]["reviewed_operation_hash"].clone();
+            let error = reserve_request(&right, &RunManager::default())
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("Windows tuning cannot run"));
+        }
+    }
+
+    #[test]
+    fn basic_target_reachability_ignores_router_hops() {
+        let result = |ping: &str,
+                      hop_destination: bool,
+                      tcp: bool|
+         -> lantern_path_basic::BasicRunResult {
+            serde_json::from_value(json!({
+                "round":"Standard","family":"ipv4","host":"h.invalid","target":"192.0.2.1",
+                "ping":[{"sequence":1,"hop":null,"elapsed_ms":null,"status":ping,"next_hop_mtu":null,"mpls":[]}],
+                "trace":[{"ttl":1,"address":"192.0.2.254","reached_destination":hop_destination,"samples":[]}],
+                "path_statistics":null,"tcp_443_ok":tcp,"failed_stages":[],
+                "status":"completed","stage_errors":[]
+            }))
+            .unwrap()
+        };
+        assert!(!basic_reached_target(&result("timeout", false, false)));
+        assert!(basic_reached_target(&result("reply", false, false)));
+        assert!(basic_reached_target(&result("timeout", false, true)));
+        assert!(basic_reached_target(&result("timeout", true, false)));
     }
 }

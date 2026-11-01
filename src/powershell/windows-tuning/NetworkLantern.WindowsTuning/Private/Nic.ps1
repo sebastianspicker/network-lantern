@@ -45,6 +45,10 @@ function Set-NetworkTuningNicAdvancedPropertyIfSupported {
     [Parameter(Mandatory)]
     [string]$Value,
 
+    # Adapter|keyword (or Adapter|DisplayName) pairs Restore can undo; $null skips the check.
+    [Parameter()]
+    [System.Collections.Generic.HashSet[string]]$BackedUpProperty,
+
     [Parameter()]
     [switch]$DryRun
   )
@@ -60,6 +64,12 @@ function Set-NetworkTuningNicAdvancedPropertyIfSupported {
 
   if (-not $property) {
     Write-Verbose -Message ("{0}: property '{1}' (keyword={2}) not found or not supported." -f $Name, $DisplayName, $keyword)
+    return $true
+  }
+
+  $backupKey = "{0}|{1}" -f $Name, $(if ($keyword) { $keyword } else { $DisplayName })
+  if ($null -ne $BackedUpProperty -and -not $BackedUpProperty.Contains($backupKey)) {
+    Write-Warning -Message ("Network adapter '{0}': '{1}' was not changed because the backup holds no restorable value for it." -f $Name, $DisplayName)
     return $true
   }
 
@@ -98,6 +108,9 @@ function Set-NetworkTuningNicConfiguration {
   [OutputType([bool], [string])]
   param(
     [Parameter()]
+    [string]$BackupFolder,
+
+    [Parameter()]
     [switch]$DryRun
   )
 
@@ -116,6 +129,31 @@ function Set-NetworkTuningNicConfiguration {
     return $false
   }
 
+  # Change only properties the backup recorded, so Restore can undo every change.
+  $backedUpProperty = $null
+  if (-not $DryRun -and -not [string]::IsNullOrWhiteSpace($BackupFolder)) {
+    $backedUpProperty = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $csv = Join-Path -Path $BackupFolder -ChildPath $script:NetworkTuningBackupFileNicAdvanced
+    if (Test-Path -LiteralPath $csv -PathType Leaf) {
+      try {
+        foreach ($row in @(Read-NetworkTuningBoundedTextFile -Path $csv -MaximumBytes $script:NetworkTuningMaxCsvBackupBytes | ConvertFrom-Csv -ErrorAction Stop)) {
+          # A keyword row counts only with a usable registry value; rows without a keyword count by DisplayName.
+          # Stricter than Restore, which can fall back to DisplayName: Apply changes less, never more.
+          if (-not [string]::IsNullOrEmpty($row.RegistryKeyword)) {
+            if (-not [string]::IsNullOrEmpty($row.RegistryValue) -and [string]$row.RegistryValue -cne 'System.String[]') {
+              $backedUpProperty.Add(("{0}|{1}" -f $row.Adapter, $row.RegistryKeyword)) | Out-Null
+            }
+          } elseif (-not [string]::IsNullOrEmpty($row.DisplayName)) {
+            $backedUpProperty.Add(("{0}|{1}" -f $row.Adapter, $row.DisplayName)) | Out-Null
+          }
+        }
+      } catch {
+        Write-Warning -Message ("Could not read the network adapter backup, so no adapter settings were changed. ({0})" -f $_.Exception.Message)
+        return $false
+      }
+    }
+  }
+
   $allSucceeded = $true
   $appliedCount = 0
   $declinedCount = 0
@@ -125,7 +163,7 @@ function Set-NetworkTuningNicConfiguration {
     foreach ($keyword in $keywords) {
       $displayName = if ($script:NetworkTuningNicKeywordReverseMap.ContainsKey($keyword)) { $script:NetworkTuningNicKeywordReverseMap[$keyword] } else { $keyword }
       $value = 'Disabled'
-      $propertySucceeded = Set-NetworkTuningNicAdvancedPropertyIfSupported -Name $nic.Name -DisplayName $displayName -Value $value -DryRun:$DryRun
+      $propertySucceeded = Set-NetworkTuningNicAdvancedPropertyIfSupported -Name $nic.Name -DisplayName $displayName -Value $value -BackedUpProperty $backedUpProperty -DryRun:$DryRun
       if ($false -eq $propertySucceeded) { $allSucceeded = $false }
       elseif (Test-NetworkTuningActionDeclined -Result $propertySucceeded) { $declinedCount++ }
       else { $appliedCount++ }

@@ -183,6 +183,9 @@ path_prepare_logs() {
 	fi
 	JSON_LOG=${json_log:-"$log_dir/mtr_results_${timestamp}.json.log"}
 	TABLE_LOG=${table_log:-"$log_dir/mtr_summary_${timestamp}.log"}
+	if [[ "$JSON_LOG" == "$TABLE_LOG" ]]; then
+		die "JSON log and table log must be different files: $JSON_LOG"
+	fi
 	mkdir -p -- "$log_dir" || die "Failed to create log directory: $log_dir"
 	if [[ -n "$json_log" ]]; then
 		mkdir -p -- "$(dirname "$JSON_LOG")" || die "Failed to create directory for JSON log"

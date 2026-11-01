@@ -67,7 +67,8 @@ function Backup-NetworkTuningState {
 
   Assert-NetworkTuningBackupWriteNamespace -BackupFolder $BackupFolder
   try {
-    $policies = @(Get-NetworkTuningManagedQosPolicy -ErrorOnFailure)
+    # Record only owned policies: Restore removes stale owned names and never removes generic ones.
+    $policies = @(Get-NetworkTuningManagedQosPolicy -ErrorOnFailure | Where-Object { Test-NetworkTuningManagedQosPolicyName -Name ([string]$_.Name) -OwnedOnly })
     if ($policies.Count -eq 0) {
       Write-Verbose -Message 'No QoS policies found to backup.'
       $qosPublished = Invoke-NetworkTuningBackupArtifactPublication -BackupFolder $BackupFolder -FileName $script:NetworkTuningBackupFileQosOurs -WriteTemporary {
@@ -155,7 +156,8 @@ function Backup-NetworkTuningState {
       $guid = Get-NetworkTuningGuidFromText -Text $text
 
       if ($guid) {
-        $powerPlanPublished = Write-NetworkTuningBackupTextArtifact -BackupFolder $BackupFolder -FileName $script:NetworkTuningBackupFilePowerplan -Content $guid
+        # The power-plan artifact validator requires the unbraced GUID form.
+        $powerPlanPublished = Write-NetworkTuningBackupTextArtifact -BackupFolder $BackupFolder -FileName $script:NetworkTuningBackupFilePowerplan -Content $guid.Trim('{', '}')
         $manifest.Components['PowerPlan'] = [bool]$powerPlanPublished
         if (-not $powerPlanPublished) { $backupHadFailure = $true }
       } else {

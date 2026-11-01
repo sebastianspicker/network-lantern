@@ -131,7 +131,12 @@ function Invoke-Iperf3 {
       $Iperf3Path = (Get-Command iperf3 -ErrorAction Stop).Source
     }
     $nativeArguments = if ($null -ne $NativeArgumentsOverride) { $NativeArgumentsOverride } else { $iperfArgs }
-    $nativeProcess = Invoke-Iperf3NativeProcess -FilePath $Iperf3Path -Arguments $nativeArguments -TimeoutMs $timeoutMs
+    # JSON output grows with streams and intervals: 1 KiB per stream-second plus 256 KiB,
+    # between the 1 MiB floor and the 10 MiB reader ceiling. --bidir doubles the streams.
+    $outputStreams = if ($Proto -eq 'TCP') { $Streams } else { 1 }
+    if ($Dir -eq 'BD') { $outputStreams *= 2 }
+    $stdOutMaxBytes = [Math]::Min(10MB, [Math]::Max($script:Iperf3StdOutMaxBytes, $outputStreams * ($Duration + $Omit) * 1KB + 256KB))
+    $nativeProcess = Invoke-Iperf3NativeProcess -FilePath $Iperf3Path -Arguments $nativeArguments -TimeoutMs $timeoutMs -StdOutMaxBytes $stdOutMaxBytes
     if ($nativeProcess.Cancelled) {
       throw (New-Iperf3CancellationException -NativeProcess $nativeProcess -RunId $nativeProcess.CancellationRunId)
     }
@@ -235,6 +240,11 @@ function Get-Iperf3Metric {
   if ($endNames -contains 'sum_sent') { $sumSent = $end.sum_sent }
   if ($endNames -contains 'sum_received') { $sumRecv = $end.sum_received }
   if ($endNames -contains 'sum') { $sumUdp = $end.sum }
+  # iperf3 >= 3.7 --bidir reports the return direction in separate *_bidir_reverse sums.
+  $sumRecvReverse = $null
+  $sumUdpReverse = $null
+  if ($endNames -contains 'sum_received_bidir_reverse') { $sumRecvReverse = $end.sum_received_bidir_reverse }
+  if ($endNames -contains 'sum_bidir_reverse') { $sumUdpReverse = $end.sum_bidir_reverse }
   $txMbps = $null
   $rxMbps = $null
   $retr = $null
@@ -243,7 +253,7 @@ function Get-Iperf3Metric {
   if ($Proto -eq 'TCP') {
     if ($Dir -eq 'TX' -or $Dir -eq 'BD') {
       $txMbps = Get-BitsPerSecondMbps -Obj $sumSent
-      $rxMbps = Get-BitsPerSecondMbps -Obj $sumRecv
+      $rxMbps = if ($Dir -eq 'BD' -and $sumRecvReverse) { Get-BitsPerSecondMbps -Obj $sumRecvReverse } else { Get-BitsPerSecondMbps -Obj $sumRecv }
     }
     elseif ($Dir -eq 'RX') {
       $rxMbps = Get-BitsPerSecondMbps -Obj $sumRecv
@@ -267,7 +277,7 @@ function Get-Iperf3Metric {
   }
   else {
     $txMbps = Get-BitsPerSecondMbps -Obj $sentBps
-    $rxMbps = Get-BitsPerSecondMbps -Obj $recvBps
+    $rxMbps = if ($sumUdpReverse) { Get-BitsPerSecondMbps -Obj $sumUdpReverse } else { Get-BitsPerSecondMbps -Obj $recvBps }
   }
   if ($sumSent -and ($sumSent.PSObject.Properties.Name -contains 'lost_percent')) { $loss = [double]$sumSent.lost_percent }
   elseif ($sumUdp -and ($sumUdp.PSObject.Properties.Name -contains 'lost_percent')) { $loss = [double]$sumUdp.lost_percent }

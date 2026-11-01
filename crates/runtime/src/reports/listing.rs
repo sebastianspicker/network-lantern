@@ -122,9 +122,11 @@ fn has_measurements(directory: &Path) -> bool {
         })
     })
 }
-/// Run start in epoch milliseconds: the report's own timestamp, else the file's mtime.
+/// Run time in epoch milliseconds. Native `summary.json` files are ordered by mtime (finish time)
+/// without parsing; legacy files use the report's own timestamp, else the file's mtime.
 fn start_millis(path: &Path) -> i64 {
     if path.is_file()
+        && path.file_name().is_none_or(|name| name != "summary.json")
         && let Ok(report) = read_json(path, SORT_KEY_LIMIT)
         && let Some(text) =
             field(&report, &["timestamp", "started_utc", "startedUtc"]).and_then(Value::as_str)
@@ -157,10 +159,11 @@ mod tests {
         let dir =
             tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         // Directory names sort opposite to start time, so path order cannot pass by luck.
-        for (name, timestamp) in [
-            ("c-oldest", "2026-01-01T00:00:00.000Z"),
-            ("a-newest", "2026-03-01T00:00:00.000Z"),
-            ("b-middle", "2026-02-01T00:00:00.000Z"),
+        let now = std::time::SystemTime::now();
+        for (name, timestamp, age) in [
+            ("c-oldest", "2026-01-01T00:00:00.000Z", 3000),
+            ("a-newest", "2026-03-01T00:00:00.000Z", 1000),
+            ("b-middle", "2026-02-01T00:00:00.000Z", 2000),
         ] {
             let run = dir.path().join(name);
             std::fs::create_dir(&run).unwrap();
@@ -173,6 +176,13 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
+            // Native runs are ordered by the summary's mtime, not its timestamp field.
+            std::fs::File::options()
+                .write(true)
+                .open(run.join("summary.json"))
+                .unwrap()
+                .set_modified(now - std::time::Duration::from_secs(age))
+                .unwrap();
         }
         // A crashed run has no timestamp, so its fresh mtime places it first.
         let crashed = dir.path().join("d-crashed");

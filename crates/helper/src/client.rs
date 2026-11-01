@@ -1,8 +1,6 @@
 use crate::{
-    HelperError, HelperStatus, ProbeRequest, Result, platform,
-    protocol::{
-        AuthorizedRequest, HelperOperation, OperationResult, ProbeResult, reviewed_hash, sign,
-    },
+    HelperError, HelperStatus, Result, platform,
+    protocol::{AuthorizedRequest, HelperOperation, OperationResult, reviewed_hash, sign},
 };
 use lantern_tuning::{TuningPlan, TuningResult};
 use tokio_util::sync::CancellationToken;
@@ -44,29 +42,6 @@ impl HelperClient {
             .await?
         {
             OperationResult::Tuning(result) => Ok(result),
-            _ => Err(HelperError::Protocol(
-                "helper returned the wrong result type".into(),
-            )),
-        }
-    }
-
-    pub async fn run_diagnostics(
-        &self,
-        run_id: Uuid,
-        reviewed_plan_hash: &str,
-        probes: Vec<ProbeRequest>,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<ProbeResult>> {
-        match self
-            .execute(
-                run_id,
-                reviewed_plan_hash,
-                HelperOperation::RunDiagnostics { probes },
-                cancellation,
-            )
-            .await?
-        {
-            OperationResult::Diagnostics(result) => Ok(result),
             _ => Err(HelperError::Protocol(
                 "helper returned the wrong result type".into(),
             )),

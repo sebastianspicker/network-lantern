@@ -1,9 +1,10 @@
 function Test-NetworkTuningManagedQosPolicyName {
   [CmdletBinding()]
   [OutputType([bool])]
-  param([Parameter(Mandatory)][string]$Name)
+  param([Parameter(Mandatory)][string]$Name, [switch]$OwnedOnly)
 
-  foreach ($prefix in $script:NetworkTuningManagedQosNamePrefixes) {
+  $prefixes = if ($OwnedOnly) { $script:NetworkTuningOwnedQosNamePrefixes } else { $script:NetworkTuningManagedQosNamePrefixes }
+  foreach ($prefix in $prefixes) {
     if ($Name.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
       return $true
     }

@@ -7,13 +7,22 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use tauri::{Manager, State};
-use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 struct AppState {
     runs: RunManager,
     operation_gate: tokio::sync::Mutex<()>,
     shutting_down: AtomicBool,
+    /// A helper registration change is in flight; exiting mid-change can leave a Linux
+    /// helper holding its removal reservation until it restarts.
+    helper_changing: AtomicBool,
+}
+/// Clears a flag when dropped, including when the owning future is cancelled.
+struct ClearOnDrop<'a>(&'a AtomicBool);
+impl Drop for ClearOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 #[tauri::command]
 async fn doctor() -> Value {
@@ -39,10 +48,7 @@ fn start_run(request: Value, out: String, state: State<'_, AppState>) -> Result<
     let task_id = id.clone();
     let throughput = request.get("capability").and_then(Value::as_str) == Some("throughput");
     tauri::async_runtime::spawn(async move {
-        let cancel = CancellationToken::new();
-        if let Err(error) =
-            runtime::execute_prepared(&request, &PathBuf::from(out), handle, &cancel).await
-        {
+        if let Err(error) = runtime::execute_prepared(&request, &PathBuf::from(out), handle).await {
             manager.failure(&task_id, &error, throughput);
         }
     });
@@ -129,7 +135,11 @@ fn busy() -> lantern_contracts::Error {
 }
 async fn helper_change(operation: &str, state: &AppState) -> Result<Value> {
     let _gate = state.operation_gate.try_lock().map_err(|_| busy())?;
-    if state.shutting_down.load(Ordering::Acquire) {
+    // Flag first, then check shutdown: a close event either sees the change in flight or
+    // happened before it started (SeqCst orders the two across threads).
+    state.helper_changing.store(true, Ordering::SeqCst);
+    let _changing = ClearOnDrop(&state.helper_changing);
+    if state.shutting_down.load(Ordering::SeqCst) {
         return Err(busy());
     }
     if state.runs.snapshot().is_some_and(|p| p.state.is_active()) {
@@ -138,7 +148,21 @@ async fn helper_change(operation: &str, state: &AppState) -> Result<Value> {
     runtime::helper_operation(operation).await
 }
 fn main() {
-    let builder = tauri::Builder::default().manage(AppState::default());
+    let builder = tauri::Builder::default()
+        .manage(AppState::default())
+        .setup(|app| {
+            // A released app starts in "/" (Finder) or its install folder (Explorer); keep the
+            // relative defaults (results, .iperf3/profiles.json, config/hosts.conf) per user.
+            #[cfg(not(debug_assertions))]
+            {
+                let data = app.path().app_data_dir()?;
+                std::fs::create_dir_all(&data)?;
+                std::env::set_current_dir(&data)?;
+            }
+            #[cfg(debug_assertions)]
+            let _ = app;
+            Ok(())
+        });
     #[cfg(feature = "e2e")]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
@@ -167,7 +191,7 @@ fn main() {
         .expect("Desktop initialization failed");
     app.run(|app, event| {
         let state = app.state::<AppState>();
-        if !measurement_active(&state.runs) {
+        if !measurement_active(&state.runs) && !state.helper_changing.load(Ordering::SeqCst) {
             return;
         }
         match event {
@@ -207,15 +231,37 @@ async fn await_measurement_cleanup(manager: &RunManager, deadline: std::time::Du
     .await
     .is_ok()
 }
+/// Waits until `flag` is false; false when the deadline passes first.
+async fn await_flag_clear(flag: &AtomicBool, deadline: std::time::Duration) -> bool {
+    tokio::time::timeout(deadline, async {
+        while flag.load(Ordering::Acquire) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
 fn begin_shutdown(app: &tauri::AppHandle, state: &AppState) {
-    if state.shutting_down.swap(true, Ordering::AcqRel) {
+    if state.shutting_down.swap(true, Ordering::SeqCst) {
         return;
     }
     state.runs.cancel_active();
     let handle = app.clone();
     let manager = state.runs.clone();
     tauri::async_runtime::spawn(async move {
-        if await_measurement_cleanup(&manager, std::time::Duration::from_secs(5)).await {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let measurement_done = await_measurement_cleanup(
+            &manager,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
+        .await;
+        // A helper change is never cancelled mid-way; it is waited for under the same deadline.
+        let helper_done = await_flag_clear(
+            &handle.state::<AppState>().helper_changing,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
+        .await;
+        if measurement_done && helper_done {
             handle.exit(0);
         } else {
             // Keep the window and cancellation state visible while cleanup continues.
@@ -240,5 +286,17 @@ mod tests {
         run.finish(lantern_contracts::exit::CANCELLED, None);
         assert!(await_measurement_cleanup(&manager, std::time::Duration::from_millis(5)).await);
         assert!(!measurement_active(&manager));
+    }
+    #[tokio::test]
+    async fn shutdown_waits_for_a_helper_change_and_its_guard_clears_the_flag() {
+        let state = AppState::default();
+        state.helper_changing.store(true, Ordering::Release);
+        assert!(
+            !await_flag_clear(&state.helper_changing, std::time::Duration::from_millis(5)).await
+        );
+        drop(ClearOnDrop(&state.helper_changing));
+        assert!(
+            await_flag_clear(&state.helper_changing, std::time::Duration::from_millis(5)).await
+        );
     }
 }

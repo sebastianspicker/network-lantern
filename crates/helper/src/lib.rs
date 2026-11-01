@@ -10,8 +10,7 @@ pub use client::HelperClient;
 pub use error::{HelperError, Result};
 pub use platform::{HelperStatus, RegistrationState};
 pub use protocol::{
-    AuthorizedRequest, HelperOperation, OperationResult, ProbeOperation, ProbeRequest, ProbeResult,
-    ThroughputLimits, reviewed_hash,
+    AuthorizedRequest, HelperOperation, OperationResult, ThroughputLimits, reviewed_hash,
 };
 pub use server::HelperServer;
 

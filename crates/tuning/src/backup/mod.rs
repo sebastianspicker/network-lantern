@@ -10,7 +10,10 @@ mod staging;
 pub(crate) mod trusted_io;
 
 #[cfg(windows)]
-pub(crate) use artifacts::{NicAdvancedRow, QosPolicySpec, RegistryValue, RscRow};
+pub(crate) use artifacts::{
+    MAX_NIC_ROWS, NicAdvancedRow, QosPolicySpec, RegistryBackup, RegistryValue, RscRow,
+    render_registry_export, write_nic_csv,
+};
 pub(crate) use artifacts::{
     parse_nic_csv, parse_qos_clixml, parse_registry_backup, parse_rsc_csv, parse_tcpip_qos_backup,
 };

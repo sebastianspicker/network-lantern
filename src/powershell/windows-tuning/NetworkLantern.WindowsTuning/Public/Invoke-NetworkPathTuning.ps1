@@ -194,8 +194,18 @@ function Invoke-NetworkPathTuning {
       Timestamp       = Get-Date
     }
   } else {
-    $backupResult = Backup-NetworkTuningState -BackupFolder $BackupFolder -DryRun:$DryRun
-    $backupStatus = Resolve-NetworkTuningRestoreStatus -Result $backupResult -DefaultIfNull 'OK'
+    # Keep the oldest verified backup so a repeated Apply cannot replace the original state;
+    # only an explicit -Action Backup replaces it.
+    $existingBackup = if ($DryRun) { $null } else { Read-NetworkTuningBackupManifest -BackupFolder $BackupFolder }
+    if ($null -ne $existingBackup -and $existingBackup.Status -eq 'OK') {
+      $backupStatus = 'OK'
+      $warnings.Add("Kept the existing verified backup at $BackupFolder; run -Action Backup to replace it.") | Out-Null
+    } elseif ($null -ne $existingBackup -and $existingBackup.Status -ne 'Missing') {
+      throw "Refusing to apply tuning because the existing backup at $BackupFolder could not be verified ($($existingBackup.Status): $($existingBackup.Message)). Move it aside or run -Action Backup to replace it."
+    } else {
+      $backupResult = Backup-NetworkTuningState -BackupFolder $BackupFolder -DryRun:$DryRun
+      $backupStatus = Resolve-NetworkTuningRestoreStatus -Result $backupResult -DefaultIfNull 'OK'
+    }
     $components['Backup'] = $backupStatus
     if ($backupStatus -eq 'Warn') {
       $warnings.Add('Backup completed with warnings: one or more components failed.') | Out-Null
@@ -217,13 +227,26 @@ function Invoke-NetworkPathTuning {
       }
     }
 
-    try {
-      $localQosResult = Enable-NetworkTuningLocalQosMarking -DryRun:$DryRun -Confirm:$false
-      $components['LocalQos'] = if ($DryRun -or (Test-NetworkTuningActionDeclined -Result $localQosResult)) { 'Skipped' } else { 'OK' }
-    } catch {
-      $warnings.Add("LocalQos failed: $($_.Exception.Message)") | Out-Null
-      $components['LocalQos'] = 'Warn'
-      $success = $false
+    # Like the NIC filter, change "Do not use NLA" only when the verified backup can restore it
+    # (a kept pre-schema-4 backup cannot).
+    $nlaRestorable = $true
+    if (-not $DryRun) {
+      $verifiedComponents = $backupVerification.Manifest['Components']
+      $nlaRestorable = ($verifiedComponents -is [System.Collections.IDictionary]) -and $verifiedComponents.Contains('TcpipQos') -and [bool]$verifiedComponents['TcpipQos']
+    }
+
+    if (-not $nlaRestorable) {
+      $warnings.Add('"Do not use NLA" was not changed because the kept backup cannot restore it; run -Action Backup, then Apply again.') | Out-Null
+      $components['LocalQos'] = 'Skipped'
+    } else {
+      try {
+        $localQosResult = Enable-NetworkTuningLocalQosMarking -DryRun:$DryRun -Confirm:$false
+        $components['LocalQos'] = if ($DryRun -or (Test-NetworkTuningActionDeclined -Result $localQosResult)) { 'Skipped' } else { 'OK' }
+      } catch {
+        $warnings.Add("LocalQos failed: $($_.Exception.Message)") | Out-Null
+        $components['LocalQos'] = 'Warn'
+        $success = $false
+      }
     }
 
     if ($normalizedPorts.Count -gt 0) {
@@ -276,7 +299,7 @@ function Invoke-NetworkPathTuning {
 
     if ($TuningProfile -eq 'Measured') {
       try {
-        $nicResult = Set-NetworkTuningNicConfiguration -DryRun:$DryRun -Confirm:$false
+        $nicResult = Set-NetworkTuningNicConfiguration -BackupFolder $BackupFolder -DryRun:$DryRun -Confirm:$false
         $components['NicPowerSaving'] = if ($DryRun -or (Test-NetworkTuningActionDeclined -Result $nicResult)) { 'Skipped' } elseif ($false -eq $nicResult) { 'Warn' } else { 'OK' }
         if (-not $DryRun -and $false -eq $nicResult) {
           $warnings.Add('NicPowerSaving failed: one or more NIC settings could not be changed.') | Out-Null

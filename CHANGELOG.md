@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Repository audit fixes (2026-11-01)
+
+- Windows tuning (Rust and PowerShell): Apply keeps an existing verified backup
+  instead of replacing it, so a repeated or retried Apply cannot overwrite the
+  original settings. Only an explicit Backup replaces it, and an unverifiable
+  backup folder refuses Apply.
+- Rust Windows tuning: back up and restore "Do not use NLA" (`TcpipQos`); roll back
+  from the backup when any Apply step fails, including QoS deletion; read WMI
+  sint8/uint8 values (`VT_I2`/`VT_UI1`) so existing DSCP policies no longer fail
+  Verify, Apply and Restore; leave NIC properties without a registry value out of
+  the backup instead of failing it, and change or restore only backed-up properties
+  that differ; validate the backup parent before creating it; release WMI before
+  COM is uninitialized.
+- QoS ownership: Apply, Backup and stale-policy removal touch only
+  `NETWORK_LANTERN_*` and `NDS_QOS_*` policies. Generic legacy names (`QoS_APP_`,
+  `QoS_UDP_TS_`, `QoS_UDP_CS2_`) are replaced only by Restore, and only when the
+  backup names them.
+- `workflow windows-tuning` carries the reviewed operation hash at the top level,
+  so `--expect-hash` and the desktop pin apply to it, and Windows refuses it
+  without the hash.
+- Path basic counts a host as reached only when the destination answered; a router
+  answering a trace hop no longer turns a down host into a success.
+- `runs export` refuses an existing destination. Run listing orders native runs by
+  the modification time of `summary.json` (finish time) instead of parsing every
+  summary for each page.
+- Helper: the Windows service reads the request length before impersonating the
+  pipe client, because Windows refuses impersonation before the first read; the
+  Windows and Linux services keep serving after a failed accept. Removed the unused
+  privileged `RunDiagnostics` operation and the probe wrappers only it used.
+- Desktop: release builds keep the default results, profile and hosts paths in the
+  per-user app data directory; closing during a helper registration change waits
+  for it; deleting a missing profile says so; a poll error clears after the next
+  successful poll.
+- Legacy PowerShell and Bash: power-plan backups pass their own validation and
+  Restore passes the plan ID the way Apply does; an unreadable run index is backed
+  up before a fresh one starts; `--bidir` rows report the reverse direction as Rx;
+  the iperf3 output cap grows with streams and duration; `-IpVersion` is enforced
+  when the reachability check is skipped; RSC restore failures are reported; a
+  `-UdpStep` below 1 Mbps warns; Apply changes only NIC properties the backup
+  holds; the MTR runner refuses identical JSON and table log paths.
+
 ### Alpha readiness remediation
 
 - Run native path probes and the throughput ICMP preflight without root: ICMP

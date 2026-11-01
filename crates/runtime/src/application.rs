@@ -226,9 +226,21 @@ fn build_plan(value: &Value) -> Result<Value> {
                 }
                 steps.push(step);
             }
-            Ok(
-                json!({"capability":"workflow","workflow":plan.workflow,"steps":steps,"warnings":warnings}),
-            )
+            let mut authorizations = steps
+                .iter()
+                .map(|step| &step["authorization"])
+                .filter(|authorization| authorization.is_object());
+            let authorization = authorizations.next().cloned();
+            if authorizations.next().is_some() {
+                return Err(Error::validation(
+                    "A workflow may contain at most one tuning step",
+                ));
+            }
+            let mut workflow = json!({"capability":"workflow","workflow":plan.workflow,"steps":steps,"warnings":warnings});
+            if let Some(authorization) = authorization {
+                workflow["authorization"] = authorization;
+            }
+            Ok(workflow)
         }
         Capability::Tuning => {
             let (plan, mut warnings, hash) = tuning(&req.layers, req.strict)?;

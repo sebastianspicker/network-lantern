@@ -38,7 +38,9 @@ function Build-TestPlan {
   $udpFixedPerDscp = if ($Protocol -eq 'TCP' -or $SingleTest) { 0 } else { 2 }
   $curMbps = ConvertTo-MbitPerSecond $UdpStart
   $maxMbps = ConvertTo-MbitPerSecond $UdpMax
-  $stepMbps = [math]::Max((ConvertTo-MbitPerSecond $UdpStep), 1)
+  $requestedStepMbps = ConvertTo-MbitPerSecond $UdpStep
+  if ($requestedStepMbps -lt 1 -and $udpFixedPerDscp -gt 0) { Write-Warning "UdpStep '$UdpStep' is below 1 Mbps; using a 1 Mbps step." }
+  $stepMbps = [math]::Max($requestedStepMbps, 1)
   $udpSatSteps = if ($Protocol -eq 'TCP' -or $SingleTest) { 0 } else { Get-Iperf3UdpSaturationStepCount -CurMbps $curMbps -MaxMbps $maxMbps -StepMbps $stepMbps }
   $udpSatPerDscp = 2 * $udpSatSteps
   $runSingleUdp = [bool]($SingleTest -and $Protocol -eq 'UDP')

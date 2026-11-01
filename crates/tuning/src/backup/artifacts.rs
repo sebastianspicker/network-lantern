@@ -53,6 +53,29 @@ pub fn parse_tcpip_qos_backup(bytes: &[u8]) -> Result<RegistryBackup> {
     )
 }
 
+/// Renders a `.reg` export of HKLM keys (given as relative paths) in the format
+/// the registry parsers accept.
+#[cfg(any(windows, test))]
+pub fn render_registry_export(groups: &[(&str, Vec<(&str, RegistryValue)>)]) -> String {
+    let mut output = String::from("Windows Registry Editor Version 5.00\r\n");
+    for (key, values) in groups {
+        output.push_str(&format!("\r\n[HKEY_LOCAL_MACHINE\\{key}]\r\n"));
+        for (name, value) in values {
+            match value {
+                RegistryValue::Missing => output.push_str(&format!("\"{name}\"=-\r\n")),
+                RegistryValue::Dword(value) => {
+                    output.push_str(&format!("\"{name}\"=dword:{value:08x}\r\n"))
+                }
+                RegistryValue::String(value) => output.push_str(&format!(
+                    "\"{name}\"=\"{}\"\r\n",
+                    value.replace('\\', "\\\\").replace('"', "\\\"")
+                )),
+            }
+        }
+    }
+    output
+}
+
 fn parse_registry_sections(
     bytes: &[u8],
     expected: &[(&str, Vec<(&str, bool)>)],
@@ -448,7 +471,11 @@ fn managed_name(name: &str) -> bool {
         "QoS_APP_",
     ]
     .iter()
-    .any(|prefix| name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix))
+    // `get` instead of slicing: a non-ASCII name in a backup must not panic the helper.
+    .any(|prefix| {
+        name.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    })
 }
 
 fn valid_windows_exe(path: &str) -> bool {
@@ -504,23 +531,66 @@ pub struct RscRow {
     pub ipv6_enabled: bool,
 }
 
+impl NicAdvancedRow {
+    /// Shared by the writer and the validator: a row Restore can write back.
+    pub fn is_restorable(&self) -> bool {
+        let has_keyword = !self.registry_keyword.trim().is_empty();
+        let has_display = !self.display_name.trim().is_empty();
+        !(self.adapter.trim().is_empty()
+            || (!has_keyword && !has_display)
+            || (has_keyword && self.registry_value.trim().is_empty())
+            || (has_display && self.display_value.trim().is_empty()))
+    }
+}
+
+pub const MAX_NIC_ROWS: usize = 512;
+
 pub fn parse_nic_csv(bytes: &[u8]) -> Result<Vec<NicAdvancedRow>> {
-    let rows = parse_csv::<NicAdvancedRow>(bytes, 512, "NIC advanced")?;
+    let rows = parse_csv::<NicAdvancedRow>(bytes, MAX_NIC_ROWS, "NIC advanced")?;
     if rows.is_empty() {
         return invalid("NIC advanced CSV must contain at least one row");
     }
-    for row in &rows {
-        let has_keyword = !row.registry_keyword.trim().is_empty();
-        let has_display = !row.display_name.trim().is_empty();
-        if row.adapter.trim().is_empty()
-            || (!has_keyword && !has_display)
-            || (has_keyword && row.registry_value.trim().is_empty())
-            || (has_display && row.display_value.trim().is_empty())
-        {
-            return invalid("NIC advanced CSV contains an incomplete row");
-        }
+    if rows.iter().any(|row| !row.is_restorable()) {
+        return invalid("NIC advanced CSV contains an incomplete row");
     }
     Ok(rows)
+}
+
+#[cfg(any(windows, test))]
+pub struct NicCsv {
+    /// Empty when no restorable row exists.
+    pub bytes: Vec<u8>,
+    /// Rows left out because Restore could not write them back.
+    pub skipped: usize,
+    /// Restorable rows left out because of the row limit.
+    pub truncated: usize,
+}
+
+/// Encodes the restorable rows, up to the validator's row limit.
+#[cfg(any(windows, test))]
+pub fn write_nic_csv(rows: impl IntoIterator<Item = NicAdvancedRow>) -> Result<NicCsv> {
+    let (mut rows, skipped): (Vec<_>, Vec<_>) =
+        rows.into_iter().partition(NicAdvancedRow::is_restorable);
+    let truncated = rows.len().saturating_sub(MAX_NIC_ROWS);
+    rows.truncate(MAX_NIC_ROWS);
+    let mut output = NicCsv {
+        bytes: Vec::new(),
+        skipped: skipped.len(),
+        truncated,
+    };
+    if rows.is_empty() {
+        return Ok(output);
+    }
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    for row in rows {
+        writer
+            .serialize(row)
+            .map_err(|error| TuningError::BackupInvalid(format!("encode NIC CSV: {error}")))?;
+    }
+    output.bytes = writer
+        .into_inner()
+        .map_err(|error| TuningError::BackupInvalid(format!("finish NIC CSV: {error}")))?;
+    Ok(output)
 }
 
 pub fn parse_rsc_csv(bytes: &[u8]) -> Result<Vec<RscRow>> {
@@ -590,6 +660,68 @@ mod tests {
                 Err(TuningError::BackupInvalid(_))
             ));
         }
+    }
+
+    fn nic(keyword: &str, registry_value: &str) -> NicAdvancedRow {
+        NicAdvancedRow {
+            adapter: "Ethernet".into(),
+            display_name: String::new(),
+            registry_keyword: keyword.into(),
+            display_value: String::new(),
+            registry_value: registry_value.into(),
+        }
+    }
+
+    #[test]
+    fn managed_name_handles_non_ascii_names_without_panicking() {
+        assert!(managed_name("QoS_APP_0"));
+        assert!(!managed_name("QoS_APPé_x"));
+    }
+
+    #[test]
+    fn nic_writer_skips_rows_the_validator_rejects() {
+        let unset = nic("NetworkAddress", "");
+        assert!(!unset.is_restorable());
+        let csv = write_nic_csv([nic("*EEE", "1"), unset]).unwrap();
+        assert_eq!((csv.skipped, csv.truncated), (1, 0));
+        assert_eq!(parse_nic_csv(&csv.bytes).unwrap(), vec![nic("*EEE", "1")]);
+        assert!(
+            write_nic_csv([nic("NetworkAddress", "")])
+                .unwrap()
+                .bytes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn nic_writer_caps_rows_at_the_validator_limit() {
+        let rows = (0..MAX_NIC_ROWS + 3).map(|index| nic(&format!("K{index}"), "1"));
+        let csv = write_nic_csv(rows).unwrap();
+        assert_eq!(csv.truncated, 3);
+        assert_eq!(parse_nic_csv(&csv.bytes).unwrap().len(), MAX_NIC_ROWS);
+    }
+
+    #[test]
+    fn registry_export_round_trips_through_the_parsers() {
+        const QOS: &str = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\QoS";
+        for value in [
+            RegistryValue::Missing,
+            RegistryValue::String("1".into()),
+            RegistryValue::String("a\\b\"c".into()),
+        ] {
+            let text = render_registry_export(&[(QOS, vec![("Do not use NLA", value.clone())])]);
+            let parsed = parse_tcpip_qos_backup(text.as_bytes()).unwrap();
+            assert_eq!(parsed.values().next().unwrap()["Do not use NLA"], value);
+        }
+        let text = render_registry_export(&[(
+            "SYSTEM\\CurrentControlSet\\Services\\AFD\\Parameters",
+            vec![("FastSendDatagramThreshold", RegistryValue::Dword(0x5dc))],
+        )]);
+        let parsed = parse_registry_backup(text.as_bytes(), false).unwrap();
+        assert_eq!(
+            parsed.values().next().unwrap()["FastSendDatagramThreshold"],
+            RegistryValue::Dword(0x5dc)
+        );
     }
 
     #[test]

@@ -52,40 +52,6 @@ pub fn tcp_trace_probe_scoped(
     )
 }
 
-#[cfg(windows)]
-pub fn udp_trace(
-    target: IpAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    base_port: u16,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    windows::udp_trace_scoped(
-        std::net::SocketAddr::new(target, 0),
-        first_ttl,
-        parameters,
-        base_port,
-        cancellation,
-    )
-}
-
-#[cfg(windows)]
-pub fn tcp_trace(
-    target: IpAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    destination_port: u16,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    windows::tcp_trace_scoped(
-        std::net::SocketAddr::new(target, 0),
-        first_ttl,
-        parameters,
-        destination_port,
-        cancellation,
-    )
-}
-
 #[cfg(unix)]
 type ReceivedPacket = Option<(Vec<u8>, Option<IpAddr>)>;
 
@@ -273,24 +239,6 @@ pub fn udp_trace_probe_scoped(
     })
 }
 
-pub fn measure_hops(
-    target: IpAddr,
-    trace: &[HopResult],
-    probe_count: u16,
-    timeout: Duration,
-    parameters: &RoundParameters,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopStatistics>, ProbeError> {
-    measure_hops_scoped(
-        SocketAddr::new(target, 0),
-        trace,
-        probe_count,
-        timeout,
-        parameters,
-        cancellation,
-    )
-}
-
 pub fn measure_hops_scoped(
     target: SocketAddr,
     trace: &[HopResult],
@@ -374,23 +322,6 @@ where
 /// datagram) ICMP socket observes the responses; unprivileged Linux reads them
 /// from the sender's `IP_RECVERR` error queue instead. The destination port
 /// identifies each quoted datagram.
-#[cfg(unix)]
-pub fn udp_trace(
-    target: IpAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    base_port: u16,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    udp_trace_scoped(
-        SocketAddr::new(target, 0),
-        first_ttl,
-        parameters,
-        base_port,
-        cancellation,
-    )
-}
-
 #[cfg(unix)]
 pub fn udp_trace_scoped(
     target: SocketAddr,
@@ -610,24 +541,6 @@ fn udp_trace_listener(
 /// use one kernel `connect()` per probe instead: the destination then sees a
 /// completed handshake immediately followed by RST.
 #[cfg(unix)]
-pub fn tcp_trace(
-    target: IpAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    destination_port: u16,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    tcp_trace_scoped(
-        SocketAddr::new(target, 0),
-        first_ttl,
-        parameters,
-        destination_port,
-        cancellation,
-    )
-}
-
-/// See [`tcp_trace`] for the raw and connect modes.
-#[cfg(unix)]
 pub fn tcp_trace_scoped(
     target: SocketAddr,
     first_ttl: u8,
@@ -666,7 +579,7 @@ pub fn tcp_trace_scoped(
     }
 }
 
-/// See [`tcp_trace`] for the raw and connect modes.
+/// See `tcp_trace_scoped` for the raw and connect modes.
 #[cfg(unix)]
 pub fn tcp_trace_probe_scoped(
     target: SocketAddr,
@@ -1183,34 +1096,6 @@ impl RawTcpListeners {
             }
         }
     }
-}
-
-#[cfg(all(not(unix), not(windows)))]
-pub fn tcp_trace(
-    _target: IpAddr,
-    _first_ttl: u8,
-    _parameters: &RoundParameters,
-    _destination_port: u16,
-    _cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    Err(ProbeError::Unsupported {
-        operation: "TCP trace",
-        message: "the current native raw socket backend supports Unix targets".into(),
-    })
-}
-
-#[cfg(all(not(unix), not(windows)))]
-pub fn udp_trace(
-    _target: IpAddr,
-    _first_ttl: u8,
-    _parameters: &RoundParameters,
-    _base_port: u16,
-    _cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    Err(ProbeError::Unsupported {
-        operation: "UDP trace",
-        message: "the current native socket backend supports Unix targets".into(),
-    })
 }
 
 #[cfg(all(not(unix), not(windows)))]

@@ -136,8 +136,8 @@ async function deleteProfile() {
   profiles.mutationBusy = true;
   updateProfileControls();
   await task.run(async () => {
-    await command('profiles_delete', { store: target.store, name: target.name });
-    task.message(`Deleted profile "${target.name}".`);
+    const deleted = await command<boolean>('profiles_delete', { store: target.store, name: target.name });
+    task.message(deleted ? `Deleted profile "${target.name}".` : `Profile "${target.name}" was not found; nothing was deleted.`);
     if (navigation === state.libraryRevision && target.store === control('store').value) await loadProfiles(false);
   });
   profiles.mutationBusy = false;

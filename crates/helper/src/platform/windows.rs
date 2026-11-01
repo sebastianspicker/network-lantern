@@ -352,7 +352,11 @@ pub(super) async fn serve(server: HelperServer, stop: CancellationToken) -> Resu
             _ = stop.cancelled() => break,
             Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
             connected = pipe.connect() => {
-                connected.map_err(|error| HelperError::transport("accept Windows helper client", error))?;
+                if let Err(error) = connected {
+                    eprintln!("accept Windows helper client: {error}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
                 if let Ok(permit) = slots.clone().try_acquire_owned() {
                     let state = service.clone();
                     let token = stop.child_token();
@@ -374,6 +378,12 @@ async fn serve_connection(
     mut pipe: NamedPipeServer,
     stop: CancellationToken,
 ) -> Result<()> {
+    // Windows refuses ImpersonateNamedPipeClient until data has been read from the pipe.
+    let length = tokio::time::timeout(FRAME_TIMEOUT, pipe.read_u32())
+        .await
+        .map_err(|_| HelperError::Protocol("request header timed out".into()))?
+        .map_err(|error| HelperError::transport("read request length", error))?
+        as usize;
     let (sid, pid) = authenticate_client(&pipe)?;
     if sid != service.owner_sid {
         return Err(HelperError::Authentication);
@@ -383,11 +393,6 @@ async fn serve_connection(
         process_id: Some(pid),
         trusted_signature: true,
     };
-    let length = tokio::time::timeout(FRAME_TIMEOUT, pipe.read_u32())
-        .await
-        .map_err(|_| HelperError::Protocol("request header timed out".into()))?
-        .map_err(|error| HelperError::transport("read request length", error))?
-        as usize;
     let bytes = read_body(&mut pipe, length, FRAME_TIMEOUT).await?;
     let message: Message = serde_json::from_slice(&bytes).map_err(|error| {
         HelperError::Protocol(format!("decode Windows helper request: {error}"))
@@ -489,7 +494,8 @@ fn token_sid(token: HANDLE) -> Result<String> {
     if needed == 0 || unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER {
         return Err(last("size token identity"));
     }
-    let mut buffer = vec![0_u8; needed as usize];
+    // u64 elements keep the buffer 8-byte aligned for the TOKEN_USER cast.
+    let mut buffer = vec![0_u64; (needed as usize).div_ceil(8)];
     if unsafe {
         GetTokenInformation(
             token,

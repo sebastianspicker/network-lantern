@@ -61,6 +61,14 @@ $script:NetworkTuningManagedQosNamePrefixes = @(
   'QoS_UDP_CS2_',
   'QoS_APP_'
 )
+# Prefixes this project owns: Apply and stale-policy removal touch only these. The generic
+# legacy prefixes above are recognised in old bundles and changed only by Restore, by exact name.
+$script:NetworkTuningOwnedQosNamePrefixes = @(
+  $script:NetworkTuningQosPortPrefix,
+  $script:NetworkTuningQosAppPrefix,
+  'NDS_QOS_PORT_',
+  'NDS_QOS_APP_'
+)
 
 # Maximum number of per-port QoS policies (cap for large port ranges)
 $script:NetworkTuningMaxPortPolicies = 100

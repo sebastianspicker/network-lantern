@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use lantern_path_io::{
     HopResult, HopStatistics, ProbeError, RoundParameters, Sample, SampleStatus, Statistics, ping,
-    resolve_target, tcp_trace, test_tcp, trace, udp_trace, validate_host,
+    resolve_target, test_tcp, trace, validate_host,
 };
 
 pub const DEFAULT_IPV4_HOSTS: &[&str] = &[

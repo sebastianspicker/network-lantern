@@ -36,6 +36,12 @@ pub(super) fn export(report: &NormalizedReport, destination: &Path) -> Result<()
 /// Export a native run together with its persisted measurements, preserving partial failures.
 /// The standalone JSON format shares the reader's explicit 16 MiB file limit.
 pub fn export_file(source: &Path, destination: &Path) -> Result<()> {
+    if destination.try_exists()? {
+        return Err(Error::validation(format!(
+            "Export destination {} already exists; choose a new file",
+            destination.display()
+        )));
+    }
     let mut report = read(source)?;
     if report
         .data
@@ -123,5 +129,14 @@ mod tests {
         assert_eq!(page["total"], 2);
         assert_eq!(page["rows"][0]["measurement"]["bytes"], 42);
         assert!(page["rows"][1]["error"].is_object());
+    }
+    #[test]
+    fn export_refuses_to_overwrite_an_existing_file() {
+        let dir =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let source = dir.path().join("summary.json");
+        std::fs::write(&source, br#"{"schema_version":1}"#).unwrap();
+        assert!(export_file(&source, &source).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), br#"{"schema_version":1}"#);
     }
 }

@@ -220,7 +220,8 @@ Helper registration and removal are explicit actions, serialized against active
 measurements. A reviewed tuning plan carries a `reviewed_operation_hash`; the desktop
 pins it, and execution refuses a plan that changed since review. On Windows the CLI
 requires it for tuning execution: copy it from `tuning --dry-run --json` and pass
-`--expect-hash <HASH>`.
+`--expect-hash <HASH>`. `workflow windows-tuning` also requires `--expect-hash <HASH>`
+from its `--dry-run`.
 
 Profiles and Reports keep asynchronous results attached to the selection that
 requested them. Selecting another profile or report prevents an older response

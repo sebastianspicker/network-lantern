@@ -188,7 +188,8 @@ function Restore-NetworkTuningQosFromBackup {
   if (-not $hadFailure) {
     $desiredNames = @($desiredSpecs | ForEach-Object { $_.Name })
     foreach ($policy in $existingPolicies) {
-      if ($policy.Name -in $desiredNames) {
+      # Generic legacy prefixes may belong to the user or a GPO: replace them by exact name above, never remove them here.
+      if ($policy.Name -in $desiredNames -or -not (Test-NetworkTuningManagedQosPolicyName -Name ([string]$policy.Name) -OwnedOnly)) {
         continue
       }
       if ($PSCmdlet.ShouldProcess($policy.Name, 'Remove stale managed NetQosPolicy')) {

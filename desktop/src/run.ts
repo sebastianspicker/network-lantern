@@ -7,6 +7,8 @@ import { readReport } from './reports';
 import { state } from './state';
 
 const pollInterval = 250;
+// A successful poll clears only an error the poller wrote, so a cancel failure stays visible.
+let pollErrorShown = false;
 
 function renderRun() {
   const run = state.run;
@@ -32,8 +34,13 @@ export async function pollRun() {
   try {
     state.run = await command<Progress | null>('run_status');
     renderRun();
+    if (pollErrorShown) {
+      $('run-error').textContent = '';
+      pollErrorShown = false;
+    }
   } catch (error) {
     $('run-error').textContent = errorMessage(error);
+    pollErrorShown = true;
   } finally {
     state.polling = false;
     updateAvailability();
@@ -51,10 +58,12 @@ export function setupRun() {
     control('cancel').disabled = true;
     try {
       $('run-error').textContent = '';
+      pollErrorShown = false;
       await command('cancel_run', { runId: state.run.run_id });
       await pollRun();
     } catch (error) {
       $('run-error').textContent = errorMessage(error);
+      pollErrorShown = false;
       control('cancel').disabled = false;
     }
   });

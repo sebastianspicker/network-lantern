@@ -402,6 +402,7 @@ function Write-Iperf3RunIndex {
       # Read, validate, append, and atomically replace while holding one stable
       # sidecar lock so concurrent writers cannot overwrite each other's entry.
       $existingRuns = @()
+      $unreadableReason = $null
       try {
         $indexText = Read-Iperf3BoundedTextFile -Path $indexPath -MaxBytes $script:Iperf3RunIndexFileMaxBytes -ArtifactDescription 'Run index file'
         if (-not [string]::IsNullOrWhiteSpace($indexText)) {
@@ -423,13 +424,27 @@ function Write-Iperf3RunIndex {
               })
             }
           }
-          catch { Write-Verbose "Could not parse existing run index; starting fresh." }
+          catch { $unreadableReason = "it could not be parsed ($($_.Exception.Message))" }
         }
       }
       catch [System.IO.FileNotFoundException] { $null = $null } # No prior index starts a fresh index.
       catch [System.IO.DirectoryNotFoundException] { $null = $null } # A removed output directory has no prior index.
-      catch [System.IO.InvalidDataException] { Write-Warning "$($_.Exception.Message) Starting fresh." }
-      catch { Write-Verbose "Could not read existing run index; starting fresh." }
+      catch [System.IO.InvalidDataException] { $unreadableReason = $_.Exception.Message }
+      catch { $unreadableReason = "it could not be read ($($_.Exception.Message))" }
+
+      # Never silently replace an index that exists but cannot be used: keep a copy first.
+      if ($null -ne $unreadableReason) {
+        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+        $backupPath = "$indexPath.corrupt.$stamp.bak"
+        try {
+          Copy-Item -LiteralPath $indexPath -Destination $backupPath -ErrorAction Stop
+          Write-Warning ("Existing run index {0} was not usable: {1}. Backed up to '{2}'. Starting a fresh index." -f $indexPath, $unreadableReason, $backupPath)
+        }
+        catch {
+          Write-Warning ("Existing run index {0} was not usable ({1}) and could not be backed up: {2}. Left it unchanged; this run was not added to the index." -f $indexPath, $unreadableReason, $_.Exception.Message)
+          return $null
+        }
+      }
 
       $allRuns = @($existingRuns) + @($runEntry)
       if ($allRuns.Count -gt 50) { $allRuns = $allRuns[($allRuns.Count - 50)..($allRuns.Count - 1)] }

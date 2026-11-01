@@ -2,10 +2,11 @@ mod wmi;
 
 use self::wmi::{Session, Value};
 use crate::{
-    ArtifactKind, BackupManifest, ComponentStatus, PowerPlan, Result, StagedBackup, TuningAction,
-    TuningComponent, TuningError, TuningPlan, TuningResult,
+    ArtifactKind, BackupBundle, BackupManifest, ComponentStatus, PowerPlan, Result, StagedBackup,
+    TuningAction, TuningComponent, TuningError, TuningPlan, TuningResult,
     backup::{
-        BackupManifestComponents, NicAdvancedRow, QosPolicySpec, RegistryValue, RscRow,
+        BackupManifestComponents, NicAdvancedRow, QosPolicySpec, RegistryBackup, RegistryValue,
+        RscRow,
         persist::{self, DurableFile},
         publication::{self, PublicationFs},
         sha256_upper,
@@ -55,15 +56,29 @@ const AUDIO_TASK: &str =
 const AFD_PARAMETERS: &str = "SYSTEM\\CurrentControlSet\\Services\\AFD\\Parameters";
 const TCPIP_QOS: &str = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\QoS";
 const HIGH_PERFORMANCE: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
-const MANAGED_PREFIXES: &[&str] = &[
-    "NETWORK_LANTERN_QOS_PORT_",
-    "NETWORK_LANTERN_QOS_APP_",
-    "NDS_QOS_PORT_",
-    "NDS_QOS_APP_",
-    "QoS_UDP_TS_",
-    "QoS_UDP_CS2_",
-    "QoS_APP_",
+
+type RegistryGroups = &'static [(&'static str, &'static [(&'static str, bool)])];
+const SYSTEM_PROFILE_VALUES: RegistryGroups = &[
+    (
+        SYSTEM_PROFILE,
+        &[
+            ("SystemResponsiveness", false),
+            ("NetworkThrottlingIndex", false),
+        ],
+    ),
+    (
+        AUDIO_TASK,
+        &[
+            ("Priority", false),
+            ("BackgroundOnly", false),
+            ("Clock Rate", false),
+            ("SchedulingCategory", true),
+            ("SFIOPriority", true),
+        ],
+    ),
 ];
+const AFD_VALUES: RegistryGroups = &[(AFD_PARAMETERS, &[("FastSendDatagramThreshold", false)])];
+const TCPIP_QOS_VALUES: RegistryGroups = &[(TCPIP_QOS, &[("Do not use NLA", true)])];
 
 pub(super) async fn execute(
     plan: &TuningPlan,
@@ -89,7 +104,7 @@ fn execute_sync(
     check_cancel(cancellation)?;
     let cim = Session::connect()?;
     crate::backup::provider::after_inventory(
-        || read_qos(&cim),
+        || read_qos(&cim, &[]),
         |current_qos| {
             execute_after_qos_inventory(plan, cancellation, inspect_only, &cim, current_qos)
         },
@@ -122,7 +137,13 @@ fn execute_after_qos_inventory(
     let folder = backup_folder(plan)?;
     match plan.config.action {
         TuningAction::Backup => {
-            let components = publish_backup(&folder, cim, &current_qos, cancellation)?;
+            let components = publish_backup(
+                &folder,
+                cim,
+                &current_qos,
+                cancellation,
+                &mut result.warnings,
+            )?;
             record_partial_backup(&components, &mut result);
             result
                 .components
@@ -130,40 +151,113 @@ fn execute_after_qos_inventory(
         }
         TuningAction::Apply => {
             // QoS inventory succeeded before any registry, provider, or power mutation.
-            let components = publish_backup(&folder, cim, &current_qos, cancellation)?;
-            record_partial_backup(&components, &mut result);
+            let present = match fs::symlink_metadata(&folder) {
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(source) => return Err(TuningError::io("inspect backup folder", source)),
+            };
+            let kept = crate::native::apply_backup_decision(&folder, present, || {
+                validate_backup_bundle(&folder)
+            })?;
+            let kept_backup = kept.is_some();
+            let bundle = match kept {
+                Some(bundle) => {
+                    result.warnings.push(format!(
+                        "Kept the existing verified backup at {}{}; run the Backup action to replace it",
+                        folder.display(),
+                        bundle
+                            .manifest()
+                            .timestamp
+                            .as_deref()
+                            .map(|timestamp| format!(" ({timestamp})"))
+                            .unwrap_or_default()
+                    ));
+                    bundle
+                }
+                None => {
+                    publish_backup(
+                        &folder,
+                        cim,
+                        &current_qos,
+                        cancellation,
+                        &mut result.warnings,
+                    )?;
+                    validate_backup_bundle(&folder)?
+                }
+            };
+            record_partial_backup(&bundle.manifest().components, &mut result);
             result
                 .components
                 .insert(TuningComponent::Backup, ComponentStatus::Ok);
+            // Cancellation is checked only before the first mutation, so it never needs a
+            // rollback; once mutation starts, Apply completes or restores the backup.
             check_cancel(cancellation)?;
-            set_registry_string(TCPIP_QOS, "Do not use NLA", "1")?;
-            result
-                .components
-                .insert(TuningComponent::LocalQos, ComponentStatus::Ok);
-            let desired = desired_qos(plan);
-            reconcile_qos(cim, &current_qos, &desired)?;
-            result.managed_policies = desired.iter().map(|policy| policy.name().into()).collect();
-            result
-                .components
-                .insert(TuningComponent::QosPolicies, ComponentStatus::Ok);
-            if plan.config.profile == crate::TuningProfile::Measured {
-                disable_nic_power_saving(cim)?;
-                result
-                    .components
-                    .insert(TuningComponent::NicPowerSaving, ComponentStatus::Ok);
+            // A kept backup can predate later manual changes, so a failed Apply rolls back
+            // to a snapshot of the state just before it, as Restore does. A fresh backup
+            // already is that state.
+            let snapshot = if kept_backup {
+                let snapshot = folder.with_file_name(format!(
+                    "NetworkLantern-apply-rollback-{}",
+                    uuid::Uuid::new_v4().simple()
+                ));
+                if snapshot.exists() {
+                    return Err(TuningError::BackupInvalid(
+                        "apply rollback snapshot path collision".into(),
+                    ));
+                }
+                publish_backup(&snapshot, cim, &current_qos, cancellation, &mut Vec::new())?;
+                Some(snapshot)
+            } else {
+                None
+            };
+            let rollback_source = snapshot.as_deref().unwrap_or(&folder);
+            if let Err(error) = apply_mutations(plan, cim, &current_qos, &bundle, &mut result) {
+                let rollback = stage_backup(rollback_source)
+                    .and_then(|staged| {
+                        restore_staged(
+                            &staged,
+                            cim,
+                            &CancellationToken::new(),
+                            &mut TuningResult::empty(&plan.config),
+                        )
+                    })
+                    .map_err(|error| {
+                        TuningError::BackupInvalid(format!(
+                            "{error}; the pre-Apply state is kept at {}",
+                            rollback_source.display()
+                        ))
+                    });
+                if rollback.is_ok()
+                    && let Some(snapshot) = &snapshot
+                {
+                    let _ = remove_snapshot(snapshot);
+                }
+                return Err(TuningError::apply_rollback(error, rollback));
             }
-            if plan.config.power_plan == PowerPlan::HighPerformance
-                || plan.config.profile == crate::TuningProfile::Measured
+            if let Some(snapshot) = &snapshot
+                && let Err(error) = remove_snapshot(snapshot)
             {
-                set_power_plan(HIGH_PERFORMANCE)?;
-                result
-                    .components
-                    .insert(TuningComponent::PowerPlan, ComponentStatus::Ok);
+                result.warnings.push(format!(
+                    "Apply succeeded, but the pre-Apply snapshot at {} could not be removed: {error}",
+                    snapshot.display()
+                ));
             }
         }
         TuningAction::Restore => {
-            let bundle = validate_backup_bundle(&folder)?;
-            let staged = bundle.stage_verified()?;
+            let staged = stage_backup(&folder)?;
+            // Re-read so the recovery snapshot also covers the legacy-named policies
+            // this backup replaces.
+            let restore_names = if staged
+                .expected_artifacts()
+                .contains(&ArtifactKind::QosPolicies)
+            {
+                qos_names(&crate::backup::parse_qos_clixml(
+                    &staged.read(ArtifactKind::QosPolicies)?,
+                )?)
+            } else {
+                Vec::new()
+            };
+            let current_qos = read_qos(cim, &restore_names)?;
             let quarantine = folder.with_file_name(format!(
                 "NetworkLantern-quarantine-{}",
                 uuid::Uuid::new_v4().simple()
@@ -173,29 +267,92 @@ fn execute_after_qos_inventory(
                     "restore quarantine path collision".into(),
                 ));
             }
-            publish_backup(&quarantine, cim, &current_qos, cancellation)?;
+            publish_backup(
+                &quarantine,
+                cim,
+                &current_qos,
+                cancellation,
+                &mut Vec::new(),
+            )?;
             let restore = restore_staged(&staged, cim, cancellation, &mut result);
             if let Err(error) = restore {
-                let rollback = validate_backup_bundle(&quarantine)
-                    .and_then(|bundle| bundle.stage_verified())
-                    .and_then(|staged| {
-                        restore_staged(
-                            &staged,
-                            cim,
-                            &CancellationToken::new(),
-                            &mut TuningResult::empty(&plan.config),
-                        )
-                    });
+                let rollback = stage_backup(&quarantine).and_then(|staged| {
+                    restore_staged(
+                        &staged,
+                        cim,
+                        &CancellationToken::new(),
+                        &mut TuningResult::empty(&plan.config),
+                    )
+                });
                 return Err(TuningError::restore_recovery(error, quarantine, rollback));
             }
-            let quarantine_identity = trusted_io::directory_identity(&quarantine)?;
-            validate_backup_bundle(&quarantine)?;
-            trusted_io::remove_owned_directory(&quarantine, quarantine_identity)?;
+            remove_snapshot(&quarantine)?;
         }
         TuningAction::Verify => unreachable!(),
     }
     result.backup_folder = Some(folder);
     Ok(result)
+}
+
+fn apply_mutations(
+    plan: &TuningPlan,
+    cim: &Session,
+    current_qos: &[QosPolicySpec],
+    bundle: &BackupBundle,
+    result: &mut TuningResult,
+) -> Result<()> {
+    // Like NIC power saving, change "Do not use NLA" only when the backup can restore it.
+    if bundle.manifest().components.tcpip_qos {
+        set_registry_string(TCPIP_QOS, "Do not use NLA", "1")?;
+        result
+            .components
+            .insert(TuningComponent::LocalQos, ComponentStatus::Ok);
+    } else {
+        result.warnings.push(
+            "\"Do not use NLA\" was not changed because the backup cannot restore it; run the Backup action, then Apply again"
+                .into(),
+        );
+        result
+            .components
+            .insert(TuningComponent::LocalQos, ComponentStatus::Skipped);
+    }
+    let desired = desired_qos(plan);
+    reconcile_qos(cim, current_qos, &desired, &[])?;
+    result.managed_policies = qos_names(&desired);
+    result
+        .components
+        .insert(TuningComponent::QosPolicies, ComponentStatus::Ok);
+    if plan.config.profile == crate::TuningProfile::Measured {
+        let status = disable_nic_power_saving(cim, bundle, &mut result.warnings)?;
+        result
+            .components
+            .insert(TuningComponent::NicPowerSaving, status);
+    }
+    if plan.config.power_plan == PowerPlan::HighPerformance
+        || plan.config.profile == crate::TuningProfile::Measured
+    {
+        set_power_plan(HIGH_PERFORMANCE)?;
+        result
+            .components
+            .insert(TuningComponent::PowerPlan, ComponentStatus::Ok);
+    }
+    Ok(())
+}
+
+/// Validates and stages a backup folder; Restore and Apply rollback share this.
+fn stage_backup(folder: &Path) -> Result<StagedBackup> {
+    validate_backup_bundle(folder)?.stage_verified()
+}
+
+/// Removes a recovery snapshot this run published, only while it is still that bundle.
+fn remove_snapshot(snapshot: &Path) -> Result<()> {
+    let identity = trusted_io::directory_identity(snapshot)?;
+    validate_backup_bundle(snapshot)?;
+    trusted_io::remove_owned_directory(snapshot, identity)
+}
+
+fn qos_names(policies: &[QosPolicySpec]) -> Vec<String> {
+    policies.iter().map(|policy| policy.name().into()).collect()
 }
 
 fn restore_staged(
@@ -209,21 +366,22 @@ fn restore_staged(
         check_cancel(cancellation)?;
         staged.verify()?;
         match kind {
-            ArtifactKind::SystemProfile => restore_registry(&staged.read(kind)?, true)?,
-            ArtifactKind::AfdParameters => restore_registry(&staged.read(kind)?, false)?,
+            ArtifactKind::SystemProfile => restore_registry(crate::backup::parse_registry_backup(
+                &staged.read(kind)?,
+                true,
+            )?)?,
+            ArtifactKind::AfdParameters => restore_registry(crate::backup::parse_registry_backup(
+                &staged.read(kind)?,
+                false,
+            )?)?,
             ArtifactKind::TcpipQos => {
-                // Validated and digest-checked, but restoring `Do not use NLA` is not
-                // implemented by the native engine; the PowerShell module restores it.
-                result.warnings.push(format!(
-                    "{} is verified but not restored by the native engine",
-                    kind.file_name()
-                ));
-                continue;
+                restore_registry(crate::backup::parse_tcpip_qos_backup(&staged.read(kind)?)?)?
             }
             ArtifactKind::QosPolicies => {
                 let desired = crate::backup::parse_qos_clixml(&staged.read(kind)?)?;
-                let current = read_qos(cim)?;
-                reconcile_qos(cim, &current, &desired)?;
+                let restore_names = qos_names(&desired);
+                let current = read_qos(cim, &restore_names)?;
+                reconcile_qos(cim, &current, &desired, &restore_names)?;
             }
             ArtifactKind::NicAdvanced => {
                 restore_nic(cim, &crate::backup::parse_nic_csv(&staged.read(kind)?)?)?
@@ -278,11 +436,15 @@ fn publish_backup(
     cim: &Session,
     qos: &[QosPolicySpec],
     cancellation: &CancellationToken,
+    warnings: &mut Vec<String>,
 ) -> Result<BackupManifestComponents> {
     check_cancel(cancellation)?;
     let parent = folder
         .parent()
         .ok_or_else(|| TuningError::BackupInvalid("backup folder has no parent".into()))?;
+    // Validate before creating so missing ancestors are never created under an
+    // untrusted or redirected path, then again for the directories just created.
+    crate::native::validate_backup_parent(parent)?;
     fs::create_dir_all(parent).map_err(|source| TuningError::io("create backup parent", source))?;
     crate::native::validate_backup_parent(parent)?;
     let staging = parent.join(format!(
@@ -297,16 +459,27 @@ fn publish_backup(
         let mut artifacts = BTreeMap::new();
         artifacts.insert(
             ArtifactKind::SystemProfile,
-            registry_export(true)?.into_bytes(),
+            registry_export(SYSTEM_PROFILE_VALUES)?.into_bytes(),
         );
         artifacts.insert(
             ArtifactKind::AfdParameters,
-            registry_export(false)?.into_bytes(),
+            registry_export(AFD_VALUES)?.into_bytes(),
         );
+        // A non-string "Do not use NLA" (e.g. REG_DWORD) cannot be restored as a string; leave
+        // it out of the backup rather than failing it, and Apply then leaves the value alone.
+        match registry_export(TCPIP_QOS_VALUES) {
+            Ok(export) => {
+                artifacts.insert(ArtifactKind::TcpipQos, export.into_bytes());
+            }
+            Err(TuningError::BackupInvalid(reason)) => warnings.push(format!(
+                "\"Do not use NLA\" was not backed up ({reason}); Apply will not change it"
+            )),
+            Err(error) => return Err(error),
+        }
         artifacts.insert(ArtifactKind::QosPolicies, qos_xml(qos).into_bytes());
         let physical_up = physical_up_adapters(cim)?;
-        let nic = nic_csv(cim, &physical_up)?;
-        let rsc = rsc_csv(cim, &physical_up)?;
+        let nic = nic_csv(cim, &physical_up, warnings)?;
+        let rsc = rsc_csv(cim, &physical_up, warnings)?;
         if !nic.is_empty() {
             artifacts.insert(ArtifactKind::NicAdvanced, nic);
         }
@@ -323,13 +496,16 @@ fn publish_backup(
         let components = BackupManifestComponents {
             system_profile: true,
             afd_parameters: true,
-            tcpip_qos: false,
+            tcpip_qos: artifacts.contains_key(&ArtifactKind::TcpipQos),
             qos_policies: true,
             nic_advanced: artifacts.contains_key(&ArtifactKind::NicAdvanced),
             nic_rsc: artifacts.contains_key(&ArtifactKind::NicRsc),
             power_plan: true,
         };
         let manifest = BackupManifest {
+            // shortcut: stays 3 because `validate_backup_bundle` rejects schema > 3; both
+            // validators accept an explicit TcpipQos component here. Bump to 4 once the
+            // Rust validator ceiling is raised.
             schema_version: 3,
             tool_name: "network-lantern".into(),
             machine_name: std::env::var("COMPUTERNAME").ok(),
@@ -383,7 +559,8 @@ fn record_partial_backup(components: &BackupManifestComponents, result: &mut Tun
     }
 }
 
-fn read_qos(cim: &Session) -> Result<Vec<QosPolicySpec>> {
+/// Reads our QoS policies; `restore_names` widens "ours" for Restore only.
+fn read_qos(cim: &Session, restore_names: &[String]) -> Result<Vec<QosPolicySpec>> {
     let rows = cim.query(
         "MSFT_NetQosPolicySettingData",
         &[
@@ -398,7 +575,7 @@ fn read_qos(cim: &Session) -> Result<Vec<QosPolicySpec>> {
     )?;
     let mut policies = Vec::new();
     for row in rows {
-        if let Some(policy) = parse_qos_row(&row)? {
+        if let Some(policy) = parse_qos_row(&row, restore_names)? {
             policies.push(policy);
         }
     }
@@ -409,6 +586,7 @@ fn reconcile_qos(
     cim: &Session,
     current: &[QosPolicySpec],
     desired: &[QosPolicySpec],
+    restore_names: &[String],
 ) -> Result<()> {
     let rows = cim.query(
         "MSFT_NetQosPolicySettingData",
@@ -424,22 +602,29 @@ fn reconcile_qos(
     )?;
     let mut managed = Vec::new();
     for row in rows {
-        if parse_qos_row(&row)?.is_some() {
+        if parse_qos_row(&row, restore_names)?.is_some() {
             managed.push(row);
         }
     }
-    for row in &managed {
-        cim.delete(row)?;
-    }
-    if let Err(error) = desired
+    // Deletion and creation share one rollback: a failure in either restores `current`.
+    let mutation = managed
         .iter()
-        .try_for_each(|policy| create_qos(cim, policy))
-    {
+        .try_for_each(|row| cim.delete(row))
+        .and_then(|()| {
+            desired
+                .iter()
+                .try_for_each(|policy| create_qos(cim, policy))
+        });
+    if let Err(error) = mutation {
         let _ = cim
             .query("MSFT_NetQosPolicySettingData", &["__PATH", "Name"], None)
             .map(|rows| {
                 rows.into_iter()
-                    .filter(|row| row.string("Name").is_some_and(managed_name))
+                    .filter(|row| {
+                        row.string("Name").is_some_and(|name| {
+                            crate::native::managed_qos_name(name, restore_names)
+                        })
+                    })
                     .for_each(|row| {
                         let _ = cim.delete(&row);
                     })
@@ -459,11 +644,11 @@ fn reconcile_qos(
     Ok(())
 }
 
-fn parse_qos_row(row: &wmi::Row) -> Result<Option<QosPolicySpec>> {
+fn parse_qos_row(row: &wmi::Row, restore_names: &[String]) -> Result<Option<QosPolicySpec>> {
     let Some(name) = row.string("Name").filter(|name| !name.trim().is_empty()) else {
         return Err(provider_inventory("QoS provider row is missing Name"));
     };
-    if !managed_name(name) {
+    if !crate::native::managed_qos_name(name, restore_names) {
         return Ok(None);
     }
     if row
@@ -590,7 +775,24 @@ fn desired_qos(plan: &TuningPlan) -> Vec<QosPolicySpec> {
     values
 }
 
-fn disable_nic_power_saving(cim: &Session) -> Result<()> {
+/// Changes only (adapter, keyword) pairs the effective backup can restore; `Warn` when
+/// any power-saving property was left unchanged for that reason.
+fn disable_nic_power_saving(
+    cim: &Session,
+    bundle: &BackupBundle,
+    warnings: &mut Vec<String>,
+) -> Result<ComponentStatus> {
+    let Some(bytes) = bundle.artifact(ArtifactKind::NicAdvanced) else {
+        warnings.push(
+            "backup contains no NIC advanced properties; NIC power saving was not changed".into(),
+        );
+        return Ok(ComponentStatus::Warn);
+    };
+    let backed_up = crate::backup::parse_nic_csv(bytes)?
+        .into_iter()
+        .filter(|row| !row.registry_keyword.is_empty())
+        .map(|row| (row.adapter, row.registry_keyword))
+        .collect::<HashSet<_>>();
     let adapters = physical_up_adapters(cim)?;
     let rows = cim.query(
         "MSFT_NetAdapterAdvancedPropertySettingData",
@@ -600,24 +802,41 @@ fn disable_nic_power_saving(cim: &Session) -> Result<()> {
     let keywords: HashSet<&str> = ["*EEE", "*GreenEthernet", "*PowerSavingMode"]
         .into_iter()
         .collect();
+    let mut skipped = 0;
     for row in rows {
-        if row
-            .string("Name")
-            .is_some_and(|name| adapters.contains(name))
-            && row
-                .string("RegistryKeyword")
-                .is_some_and(|value| keywords.contains(value))
-        {
-            cim.update(&row, &[("RegistryValue", Value::Strings(vec!["0".into()]))])?;
+        let (Some(name), Some(keyword)) = (row.string("Name"), row.string("RegistryKeyword"))
+        else {
+            continue;
+        };
+        if !adapters.contains(name) || !keywords.contains(keyword) {
+            continue;
         }
+        if !backed_up.contains(&(name.to_owned(), keyword.to_owned())) {
+            skipped += 1;
+            continue;
+        }
+        cim.update(&row, &[("RegistryValue", Value::Strings(vec!["0".into()]))])?;
     }
-    Ok(())
+    if skipped > 0 {
+        warnings.push(format!(
+            "{skipped} NIC power-saving properties are not in the backup and were not changed"
+        ));
+        return Ok(ComponentStatus::Warn);
+    }
+    Ok(ComponentStatus::Ok)
 }
 
 fn restore_nic(cim: &Session, desired: &[NicAdvancedRow]) -> Result<()> {
     let rows = cim.query(
         "MSFT_NetAdapterAdvancedPropertySettingData",
-        &["__PATH", "Name", "DisplayName", "RegistryKeyword"],
+        &[
+            "__PATH",
+            "Name",
+            "DisplayName",
+            "RegistryKeyword",
+            "DisplayValue",
+            "RegistryValue",
+        ],
         None,
     )?;
     for value in desired {
@@ -635,7 +854,16 @@ fn restore_nic(cim: &Session, desired: &[NicAdvancedRow]) -> Result<()> {
                 code: -1,
                 message: format!("property missing for {}", value.adapter),
             })?;
+        // Unchanged rows are skipped: rewriting resets adapters and would collapse
+        // multi-value properties to the single backed-up value.
         if !value.registry_keyword.is_empty() {
+            if row
+                .strings("RegistryValue")
+                .and_then(|values| values.first())
+                == Some(&value.registry_value)
+            {
+                continue;
+            }
             cim.update(
                 row,
                 &[(
@@ -643,7 +871,7 @@ fn restore_nic(cim: &Session, desired: &[NicAdvancedRow]) -> Result<()> {
                     Value::Strings(vec![value.registry_value.clone()]),
                 )],
             )?;
-        } else {
+        } else if row.string("DisplayValue") != Some(value.display_value.as_str()) {
             cim.update(
                 row,
                 &[("DisplayValue", Value::String(value.display_value.clone()))],
@@ -710,7 +938,11 @@ fn physical_up_adapters(cim: &Session) -> Result<HashSet<String>> {
         .collect()
 }
 
-fn nic_csv(cim: &Session, adapters: &HashSet<String>) -> Result<Vec<u8>> {
+fn nic_csv(
+    cim: &Session,
+    adapters: &HashSet<String>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<u8>> {
     let rows = cim.query(
         "MSFT_NetAdapterAdvancedPropertySettingData",
         &[
@@ -722,21 +954,13 @@ fn nic_csv(cim: &Session, adapters: &HashSet<String>) -> Result<Vec<u8>> {
         ],
         None,
     )?;
-    let rows = rows
-        .into_iter()
-        .filter(|row| {
-            row.string("Name")
-                .is_some_and(|name| adapters.contains(name))
-        })
-        .take(512)
-        .collect::<Vec<_>>();
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut writer = csv::Writer::from_writer(Vec::new());
-    for row in rows {
-        writer
-            .serialize(NicAdvancedRow {
+    let csv = crate::backup::write_nic_csv(
+        rows.into_iter()
+            .filter(|row| {
+                row.string("Name")
+                    .is_some_and(|name| adapters.contains(name))
+            })
+            .map(|row| NicAdvancedRow {
                 adapter: row.string("Name").unwrap_or_default().into(),
                 display_name: row.string("DisplayName").unwrap_or_default().into(),
                 registry_keyword: row.string("RegistryKeyword").unwrap_or_default().into(),
@@ -746,28 +970,51 @@ fn nic_csv(cim: &Session, adapters: &HashSet<String>) -> Result<Vec<u8>> {
                     .and_then(|values| values.first())
                     .cloned()
                     .unwrap_or_default(),
-            })
-            .map_err(|error| TuningError::BackupInvalid(format!("encode NIC CSV: {error}")))?;
+            }),
+    )?;
+    // Apply changes only backed-up properties, so a skipped row is never changed.
+    if csv.skipped > 0 {
+        warnings.push(format!(
+            "{} NIC properties without a registry value were not backed up and will not be changed",
+            csv.skipped
+        ));
     }
-    writer
-        .into_inner()
-        .map_err(|error| TuningError::BackupInvalid(format!("finish NIC CSV: {error}")))
+    if csv.truncated > 0 {
+        warnings.push(format!(
+            "NIC backup is limited to {} properties; {} more were not backed up and will not be changed",
+            crate::backup::MAX_NIC_ROWS,
+            csv.truncated
+        ));
+    }
+    Ok(csv.bytes)
 }
 
-fn rsc_csv(cim: &Session, adapters: &HashSet<String>) -> Result<Vec<u8>> {
+fn rsc_csv(
+    cim: &Session,
+    adapters: &HashSet<String>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<u8>> {
+    const MAX_RSC_ROWS: usize = 64;
     let rows = cim.query(
         "MSFT_NetAdapterRscSettingData",
         &["Name", "IPv4Enabled", "IPv6Enabled"],
         None,
     )?;
-    let rows = rows
+    let mut rows = rows
         .into_iter()
         .filter(|row| {
             row.string("Name")
                 .is_some_and(|name| adapters.contains(name))
         })
-        .take(64)
         .collect::<Vec<_>>();
+    if rows.len() > MAX_RSC_ROWS {
+        // Tuning never changes RSC; adapters past the cap keep their state on Restore.
+        warnings.push(format!(
+            "RSC backup is limited to {MAX_RSC_ROWS} adapters; {} more were not backed up",
+            rows.len() - MAX_RSC_ROWS
+        ));
+        rows.truncate(MAX_RSC_ROWS);
+    }
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -824,57 +1071,19 @@ fn xml_field(output: &mut String, name: &str, value: &str) {
     output.push_str("</S>");
 }
 
-fn managed_name(name: &str) -> bool {
-    MANAGED_PREFIXES.iter().any(|prefix| {
-        name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix)
-    })
-}
-
-fn registry_export(system: bool) -> Result<String> {
-    let groups: &[(&str, &[(&str, bool)])] = if system {
-        &[
-            (
-                SYSTEM_PROFILE,
-                &[
-                    ("SystemResponsiveness", false),
-                    ("NetworkThrottlingIndex", false),
-                ],
-            ),
-            (
-                AUDIO_TASK,
-                &[
-                    ("Priority", false),
-                    ("BackgroundOnly", false),
-                    ("Clock Rate", false),
-                    ("SchedulingCategory", true),
-                    ("SFIOPriority", true),
-                ],
-            ),
-        ]
-    } else {
-        &[(AFD_PARAMETERS, &[("FastSendDatagramThreshold", false)])]
-    };
-    let mut output = String::from("Windows Registry Editor Version 5.00\r\n");
-    for (key, values) in groups {
-        output.push_str(&format!("\r\n[HKEY_LOCAL_MACHINE\\{key}]\r\n"));
-        for (name, string) in *values {
-            match read_registry(key, name, *string)? {
-                RegistryValue::Missing => output.push_str(&format!("\"{name}\"=-\r\n")),
-                RegistryValue::Dword(value) => {
-                    output.push_str(&format!("\"{name}\"=dword:{value:08x}\r\n"))
-                }
-                RegistryValue::String(value) => output.push_str(&format!(
-                    "\"{name}\"=\"{}\"\r\n",
-                    value.replace('\\', "\\\\").replace('"', "\\\"")
-                )),
-            }
-        }
+fn registry_export(groups: RegistryGroups) -> Result<String> {
+    let mut values = Vec::new();
+    for (key, names) in groups {
+        let entries = names
+            .iter()
+            .map(|(name, string)| Ok((*name, read_registry(key, name, *string)?)))
+            .collect::<Result<Vec<_>>>()?;
+        values.push((*key, entries));
     }
-    Ok(output)
+    Ok(crate::backup::render_registry_export(&values))
 }
 
-fn restore_registry(bytes: &[u8], system: bool) -> Result<()> {
-    let values = crate::backup::parse_registry_backup(bytes, system)?;
+fn restore_registry(values: RegistryBackup) -> Result<()> {
     for (full_key, entries) in values {
         let key = full_key
             .strip_prefix("HKEY_LOCAL_MACHINE\\")

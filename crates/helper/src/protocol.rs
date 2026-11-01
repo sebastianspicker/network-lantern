@@ -1,6 +1,5 @@
 use crate::{HelperError, Result};
 use hmac::{Hmac, Mac};
-use lantern_path_io::{HopResult, Sample};
 use lantern_tuning::{TuningPlan, TuningResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,7 +11,6 @@ use std::{
 use uuid::Uuid;
 
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
-pub const MAX_PROBES_PER_REQUEST: usize = 256;
 const MAX_NONCES: usize = 4096;
 const FRAME_VALIDITY: Duration = Duration::from_secs(5 * 60);
 const CLOCK_SKEW: Duration = Duration::from_secs(30);
@@ -32,9 +30,6 @@ pub struct AuthorizedRequest {
 pub enum HelperOperation {
     ExecuteTuning {
         plan: TuningPlan,
-    },
-    RunDiagnostics {
-        probes: Vec<ProbeRequest>,
     },
     BasicPath {
         item: lantern_path_basic::BasicPlanItem,
@@ -81,57 +76,10 @@ impl ThroughputLimits {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProbeRequest {
-    pub target: IpAddr,
-    pub operation: ProbeOperation,
-    pub timeout_ms: u32,
-    pub traffic_class: Option<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ProbeOperation {
-    Ping {
-        count: u16,
-        payload_bytes: u16,
-        dont_fragment: bool,
-    },
-    IcmpTrace {
-        first_ttl: u8,
-        max_hops: u8,
-        payload_bytes: u16,
-    },
-    UdpTrace {
-        first_ttl: u8,
-        max_hops: u8,
-        payload_bytes: u16,
-        base_port: u16,
-    },
-    TcpTrace {
-        first_ttl: u8,
-        max_hops: u8,
-        port: u16,
-    },
-    TcpConnect {
-        port: u16,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum ProbeResult {
-    Samples(Vec<Sample>),
-    Hops(Vec<HopResult>),
-    TcpConnected(bool),
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum OperationResult {
     Tuning(TuningResult),
-    Diagnostics(Vec<ProbeResult>),
     BasicPath(lantern_path_basic::BasicRunResult),
     TracePath(lantern_path_trace::TraceRunResult),
     ThroughputPreflight {
@@ -228,7 +176,6 @@ impl AuthorizedRequest {
                     return Err(HelperError::Scope("tuning plan is not canonical".into()));
                 }
             }
-            HelperOperation::RunDiagnostics { probes } => validate_probes(probes)?,
             HelperOperation::BasicPath { item, settings } => {
                 lantern_path_io::validate_host(&item.host).map_err(probe_validation)?;
                 settings.validate().map_err(probe_validation)?;
@@ -268,71 +215,6 @@ pub fn reviewed_hash(operation: &HelperOperation) -> Result<String> {
     let bytes = serde_json::to_vec(operation)
         .map_err(|error| HelperError::Protocol(format!("serialize reviewed operation: {error}")))?;
     Ok(hex_upper(&Sha256::digest(bytes)))
-}
-
-fn validate_probes(probes: &[ProbeRequest]) -> Result<()> {
-    if probes.is_empty() || probes.len() > MAX_PROBES_PER_REQUEST {
-        return Err(HelperError::Validation(format!(
-            "diagnostic request must contain 1..={MAX_PROBES_PER_REQUEST} probes"
-        )));
-    }
-    for probe in probes {
-        if !(1..=30_000).contains(&probe.timeout_ms) {
-            return Err(HelperError::Validation(
-                "probe timeout must be 1..=30000 ms".into(),
-            ));
-        }
-        let (first, max, payload) = match probe.operation {
-            ProbeOperation::Ping {
-                count,
-                payload_bytes,
-                ..
-            } => {
-                if !(1..=100).contains(&count) {
-                    return Err(HelperError::Validation("ping count must be 1..=100".into()));
-                }
-                (1, 1, payload_bytes)
-            }
-            ProbeOperation::IcmpTrace {
-                first_ttl,
-                max_hops,
-                payload_bytes,
-            }
-            | ProbeOperation::UdpTrace {
-                first_ttl,
-                max_hops,
-                payload_bytes,
-                ..
-            } => (first_ttl, max_hops, payload_bytes),
-            ProbeOperation::TcpTrace {
-                first_ttl,
-                max_hops,
-                port,
-            } => {
-                if port == 0 {
-                    return Err(HelperError::Validation("TCP port must be nonzero".into()));
-                }
-                (first_ttl, max_hops, 0)
-            }
-            ProbeOperation::TcpConnect { port } => {
-                if port == 0 {
-                    return Err(HelperError::Validation("TCP port must be nonzero".into()));
-                }
-                (1, 1, 0)
-            }
-        };
-        if first == 0 || max == 0 || first > max || max > 64 {
-            return Err(HelperError::Validation(
-                "probe TTL range must be within 1..=64".into(),
-            ));
-        }
-        if payload > 65_000 {
-            return Err(HelperError::Validation(
-                "probe payload exceeds 65000 bytes".into(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn sign(secret: &[u8; 32], nonce: [u8; 32], body: Vec<u8>) -> Result<SignedFrame> {

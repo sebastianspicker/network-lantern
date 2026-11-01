@@ -87,7 +87,8 @@ pwsh -NoProfile -File .\apps\windows-tuning\Invoke-NetworkPathTuning.ps1 `
 
 Apply creates the backup before it changes anything. It refuses to continue if
 the backup status, manifest, expected artifacts, digests, or path-trust checks
-fail. Adapters without advanced properties or RSC rows (VMs, Wi-Fi) produce an
+fail. If the folder already holds a verified backup, Apply keeps it so the
+original settings survive repeated runs; only `-Action Backup` replaces it. Adapters without advanced properties or RSC rows (VMs, Wi-Fi) produce an
 empty, valid backup for those components; only a read error fails the backup. A
 declined confirmation is reported as `Skipped`, not `OK`. Apply and Restore ask
 for exactly one confirmation (`ShouldProcess`, high impact) before any change;

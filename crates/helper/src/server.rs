@@ -1,11 +1,9 @@
 use crate::{
     HelperError, Result,
     protocol::{
-        AuthorizedRequest, HelperOperation, OperationResult, ProbeOperation, ProbeResult,
-        ReplayCache, SignedFrame, verify,
+        AuthorizedRequest, HelperOperation, OperationResult, ReplayCache, SignedFrame, verify,
     },
 };
-use lantern_path_io::RoundParameters;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -210,16 +208,6 @@ async fn dispatch(
                 .await?;
             Ok(OperationResult::Tuning(value))
         }
-        HelperOperation::RunDiagnostics { probes } => {
-            let mut results = Vec::with_capacity(probes.len());
-            for probe in probes {
-                if cancellation.is_cancelled() {
-                    return Err(HelperError::Cancelled);
-                }
-                results.push(run_probe(probe, cancellation).await?);
-            }
-            Ok(OperationResult::Diagnostics(results))
-        }
         HelperOperation::BasicPath { item, settings } => {
             lantern_path_basic::execute_item(&item, &settings, cancellation)
                 .await
@@ -243,86 +231,6 @@ async fn dispatch(
             .await
             .map(OperationResult::ThroughputMeasurement)
             .map_err(throughput_error),
-    }
-}
-
-async fn run_probe(
-    request: crate::ProbeRequest,
-    cancellation: &CancellationToken,
-) -> Result<ProbeResult> {
-    let timeout = Duration::from_millis(u64::from(request.timeout_ms));
-    let parameters = move |payload_size, max_hops, dont_fragment| RoundParameters {
-        payload_size,
-        dont_fragment,
-        max_hops,
-        timeout,
-        traffic_class: request.traffic_class,
-    };
-    match request.operation {
-        ProbeOperation::TcpConnect { port } => {
-            lantern_path_io::test_tcp(request.target, port, timeout, cancellation)
-                .await
-                .map(ProbeResult::TcpConnected)
-                .map_err(probe_error)
-        }
-        operation => {
-            let target = request.target;
-            let token = cancellation.clone();
-            tokio::task::spawn_blocking(move || match operation {
-                ProbeOperation::Ping {
-                    count,
-                    payload_bytes,
-                    dont_fragment,
-                } => lantern_path_io::ping(
-                    target,
-                    count,
-                    64,
-                    &parameters(payload_bytes.into(), 1, dont_fragment),
-                    &token,
-                )
-                .map(ProbeResult::Samples),
-                ProbeOperation::IcmpTrace {
-                    first_ttl,
-                    max_hops,
-                    payload_bytes,
-                } => lantern_path_io::trace(
-                    target,
-                    first_ttl,
-                    &parameters(payload_bytes.into(), max_hops, false),
-                    &token,
-                )
-                .map(ProbeResult::Hops),
-                ProbeOperation::UdpTrace {
-                    first_ttl,
-                    max_hops,
-                    payload_bytes,
-                    base_port,
-                } => lantern_path_io::udp_trace(
-                    target,
-                    first_ttl,
-                    &parameters(payload_bytes.into(), max_hops, false),
-                    base_port,
-                    &token,
-                )
-                .map(ProbeResult::Hops),
-                ProbeOperation::TcpTrace {
-                    first_ttl,
-                    max_hops,
-                    port,
-                } => lantern_path_io::tcp_trace(
-                    target,
-                    first_ttl,
-                    &parameters(0, max_hops, false),
-                    port,
-                    &token,
-                )
-                .map(ProbeResult::Hops),
-                ProbeOperation::TcpConnect { .. } => unreachable!(),
-            })
-            .await
-            .map_err(|error| HelperError::Probe(format!("probe worker failed: {error}")))?
-            .map_err(probe_error)
-        }
     }
 }
 

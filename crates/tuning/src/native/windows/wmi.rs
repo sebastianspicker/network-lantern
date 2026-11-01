@@ -16,7 +16,7 @@ use windows::{
             Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE},
             Variant::{
                 VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_ARRAY, VT_BOOL, VT_BSTR, VT_I1,
-                VT_I4, VT_UI2, VT_UI4, VariantClear,
+                VT_I2, VT_I4, VT_UI1, VT_UI2, VT_UI4, VariantClear,
             },
             Wmi::{
                 IEnumWbemClassObject, IWbemClassObject, IWbemLocator, IWbemServices,
@@ -73,14 +73,32 @@ impl Row {
 }
 
 pub(super) struct Session {
-    services: IWbemServices,
+    // `ManuallyDrop` so `Drop` releases the interface before `CoUninitialize`.
+    services: std::mem::ManuallyDrop<IWbemServices>,
     uninitialize: bool,
 }
 
 impl Session {
     pub fn connect() -> Result<Self> {
+        let uninitialize = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+        // `connect_services` drops its interfaces before returning, so the error
+        // path can balance this call's `CoInitializeEx`.
+        match Self::connect_services() {
+            Ok(services) => Ok(Self {
+                services: std::mem::ManuallyDrop::new(services),
+                uninitialize,
+            }),
+            Err(error) => {
+                if uninitialize {
+                    unsafe { CoUninitialize() }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn connect_services() -> Result<IWbemServices> {
         unsafe {
-            let uninitialize = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
             let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
                 .map_err(|error| native("create WMI locator", error))?;
             let services = locator
@@ -105,10 +123,7 @@ impl Session {
                 EOAC_NONE,
             )
             .map_err(|error| native("secure WMI proxy", error))?;
-            Ok(Self {
-                services,
-                uninitialize,
-            })
+            Ok(services)
         }
     }
 
@@ -256,6 +271,8 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // SAFETY: `services` is never used after this point.
+        unsafe { std::mem::ManuallyDrop::drop(&mut self.services) };
         if self.uninitialize {
             unsafe { CoUninitialize() }
         }
@@ -323,6 +340,9 @@ fn read_value(object: &IWbemClassObject, name: &str) -> Result<Option<Value>> {
             VT_BSTR => Value::String((*inner.Anonymous.bstrVal).to_string()),
             VT_BOOL => Value::Bool(inner.Anonymous.boolVal == VARIANT_TRUE),
             VT_I1 => Value::Number(i64::from(inner.Anonymous.cVal)),
+            // WMI reports sint8/sint16 (e.g. DSCPAction) as VT_I2 and uint8 as VT_UI1.
+            VT_I2 => Value::Number(i64::from(inner.Anonymous.iVal)),
+            VT_UI1 => Value::Number(i64::from(inner.Anonymous.bVal)),
             VT_I4 => Value::Number(i64::from(inner.Anonymous.lVal)),
             VT_UI2 => Value::Number(i64::from(inner.Anonymous.uiVal)),
             VT_UI4 => Value::Number(i64::from(inner.Anonymous.ulVal)),

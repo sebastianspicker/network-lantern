@@ -37,6 +37,12 @@ pub enum TuningError {
         recovery_backup: PathBuf,
         rollback_status: String,
     },
+    #[error("{source}; {rollback_status}")]
+    ApplyRollback {
+        #[source]
+        source: Box<TuningError>,
+        rollback_status: String,
+    },
 }
 
 impl TuningError {
@@ -57,6 +63,19 @@ impl TuningError {
         Self::RestoreRecovery {
             source: Box::new(source),
             recovery_backup,
+            rollback_status,
+        }
+    }
+
+    /// Annotates a failed Apply with the outcome of restoring its backup.
+    #[cfg(any(windows, test))]
+    pub(crate) fn apply_rollback(source: TuningError, rollback: Result<()>) -> Self {
+        let rollback_status = match rollback {
+            Ok(()) => "rolled back from backup".into(),
+            Err(error) => format!("rollback also failed: {error}"),
+        };
+        Self::ApplyRollback {
+            source: Box::new(source),
             rollback_status,
         }
     }
@@ -83,6 +102,19 @@ mod tests {
         assert!(message.contains("NetworkLantern-quarantine-test"));
         assert!(message.contains("rollback failed"));
         assert!(message.contains("code 13"));
+    }
+
+    #[test]
+    fn apply_rollback_error_keeps_the_original_error_and_rollback_outcome() {
+        let failed = || TuningError::BackupInvalid("power plan missing".into());
+        let ok = TuningError::apply_rollback(failed(), Ok(())).to_string();
+        assert!(ok.ends_with("power plan missing; rolled back from backup"));
+        let error = TuningError::apply_rollback(failed(), Err(TuningError::Cancelled));
+        assert!(
+            error
+                .to_string()
+                .ends_with("power plan missing; rollback also failed: operation cancelled")
+        );
     }
 
     #[test]

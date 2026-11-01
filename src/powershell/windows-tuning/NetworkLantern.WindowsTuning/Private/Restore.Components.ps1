@@ -129,6 +129,7 @@ function Restore-NetworkTuningRscFromBackup {
   }
 
   $didWork = $false
+  $rowFailed = $false
   try {
     foreach ($row in @(Read-NetworkTuningBoundedTextFile -Path $rscFile -MaximumBytes $script:NetworkTuningMaxCsvBackupBytes | ConvertFrom-Csv -ErrorAction Stop)) {
       if ([string]::IsNullOrWhiteSpace($row.Name)) {
@@ -139,21 +140,31 @@ function Restore-NetworkTuningRscFromBackup {
 
       if ($PSCmdlet.ShouldProcess($row.Name, 'Restore NetAdapterRsc IPv4/IPv6 state')) {
         $didWork = $true
-        if ($ipv4Enabled) {
-          Enable-NetAdapterRsc -Name $row.Name -IPv4 -ErrorAction SilentlyContinue | Out-Null
-        } else {
-          Disable-NetAdapterRsc -Name $row.Name -IPv4 -ErrorAction SilentlyContinue | Out-Null
-        }
-        if ($ipv6Enabled) {
-          Enable-NetAdapterRsc -Name $row.Name -IPv6 -ErrorAction SilentlyContinue | Out-Null
-        } else {
-          Disable-NetAdapterRsc -Name $row.Name -IPv6 -ErrorAction SilentlyContinue | Out-Null
+        # One failing adapter must not stop the others from being restored.
+        try {
+          if ($ipv4Enabled) {
+            Enable-NetAdapterRsc -Name $row.Name -IPv4 -ErrorAction Stop | Out-Null
+          } else {
+            Disable-NetAdapterRsc -Name $row.Name -IPv4 -ErrorAction Stop | Out-Null
+          }
+          if ($ipv6Enabled) {
+            Enable-NetAdapterRsc -Name $row.Name -IPv6 -ErrorAction Stop | Out-Null
+          } else {
+            Disable-NetAdapterRsc -Name $row.Name -IPv6 -ErrorAction Stop | Out-Null
+          }
+        } catch {
+          $rowFailed = $true
+          Write-Warning -Message ("Could not restore RSC on adapter '{0}': {1}" -f $row.Name, $_.Exception.Message)
         }
       }
     }
   } catch {
     Write-Verbose -Message 'RSC restore failed.'
     return Get-NetworkTuningRestoreComponentResult -Status 'Warn' -Message 'RSC restore failed.'
+  }
+
+  if ($rowFailed) {
+    return Get-NetworkTuningRestoreComponentResult -Status 'Warn' -Message 'RSC restore failed for one or more adapters.'
   }
 
   if (-not $didWork) {
@@ -186,7 +197,9 @@ function Restore-NetworkTuningPowerPlanFromBackup {
   }
 
   try {
-    $null = & powercfg /S $guid 2>&1
+    # Same unbraced form Apply passes to powercfg.
+    $planId = $guid.Trim('{', '}')
+    $null = & powercfg /S $planId 2>&1
     if ($LASTEXITCODE -ne 0) {
       Write-Warning -Message ("Could not restore your previous power plan. The saved plan may have been removed from this PC (error code {0})." -f $LASTEXITCODE)
       return Get-NetworkTuningRestoreComponentResult -Status 'Warn' -Message ('powercfg /S exited with non-zero status.')

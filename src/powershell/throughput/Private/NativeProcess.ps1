@@ -296,7 +296,9 @@ function Get-Iperf3CompletedStreamText {
     [Parameter(Mandatory)]
     [System.Threading.Tasks.Task]$StdErrTask,
     [ValidateRange(1, 30000)]
-    [int]$TimeoutMs = 1000
+    [int]$TimeoutMs = 1000,
+    [ValidateRange(1, 10485760)]
+    [int]$StdOutMaxBytes = $script:Iperf3StdOutMaxBytes
   )
   $combinedTask = [System.Threading.Tasks.Task]::WhenAll([System.Threading.Tasks.Task[]]@($StdOutTask, $StdErrTask))
   $completed = $false
@@ -317,7 +319,7 @@ function Get-Iperf3CompletedStreamText {
     try {
       $stdoutResult = $StdOutTask.Result
       $stdoutDecoded = [System.Text.Encoding]::UTF8.GetString([byte[]]$stdoutResult.Bytes)
-      $stdoutBounded = ConvertTo-Iperf3BoundedUtf8Text -Text $stdoutDecoded -MaxBytes $script:Iperf3StdOutMaxBytes
+      $stdoutBounded = ConvertTo-Iperf3BoundedUtf8Text -Text $stdoutDecoded -MaxBytes $StdOutMaxBytes
       $stdout = $stdoutBounded.Text
       $stdoutTruncated = [bool]($stdoutResult.Truncated -or $stdoutBounded.Truncated)
     }
@@ -365,7 +367,9 @@ function Invoke-Iperf3NativeProcess {
     [string]$CancellationRunId = $env:NETWORK_LANTERN_IPERF3_CANCEL_RUN_ID,
     [string]$CancellationNonce = $env:NETWORK_LANTERN_IPERF3_CANCEL_NONCE,
     [ValidateRange(10, 1000)]
-    [int]$CancellationPollIntervalMs = 100
+    [int]$CancellationPollIntervalMs = 100,
+    [ValidateRange(1, 10485760)]
+    [int]$StdOutMaxBytes = $script:Iperf3StdOutMaxBytes
   )
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $FilePath
@@ -386,7 +390,7 @@ function Invoke-Iperf3NativeProcess {
     )
     $stdoutTask = [NetworkLantern.Throughput.Native.BoundedStreamReader]::ReadAsync(
       $proc.StandardOutput.BaseStream,
-      $script:Iperf3StdOutMaxBytes
+      $StdOutMaxBytes
     )
     $cancelled = $false
     $hasCancellationContract = -not [string]::IsNullOrWhiteSpace($CancellationFile) -and
@@ -448,7 +452,7 @@ function Invoke-Iperf3NativeProcess {
     $exitCode = if ($rootExited) { $proc.ExitCode } else { -1 }
     # A normally exited root can still have a descendant holding inherited pipe
     # handles. Drain only within a fixed budget and never await these tasks later.
-    $streamResult = Get-Iperf3CompletedStreamText -StdOutTask $stdoutTask -StdErrTask $stderrTask -TimeoutMs $StreamDrainTimeoutMs
+    $streamResult = Get-Iperf3CompletedStreamText -StdOutTask $stdoutTask -StdErrTask $stderrTask -TimeoutMs $StreamDrainTimeoutMs -StdOutMaxBytes $StdOutMaxBytes
     return [pscustomobject]@{
       ExitCode             = $exitCode
       StdOut               = $streamResult.StdOut

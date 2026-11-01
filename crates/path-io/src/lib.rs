@@ -12,9 +12,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub use native::{
-    measure_hops, measure_hops_scoped, native_access, ping, ping_scoped, ping_scoped_with_ttl,
-    tcp_trace, tcp_trace_probe_scoped, tcp_trace_scoped, trace, trace_probe_scoped, trace_scoped,
-    udp_trace, udp_trace_probe_scoped, udp_trace_scoped,
+    measure_hops_scoped, native_access, ping, ping_scoped, ping_scoped_with_ttl,
+    tcp_trace_probe_scoped, tcp_trace_scoped, trace, trace_probe_scoped, trace_scoped,
+    udp_trace_probe_scoped, udp_trace_scoped,
 };
 
 /// How a TCP trace emits its probes on this host.

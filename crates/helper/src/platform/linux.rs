@@ -527,7 +527,7 @@ async fn serve(server: HelperServer, uid: u32) -> Result<()> {
             _=tokio::signal::ctrl_c()=>break,
             Some(_)=tasks.join_next(),if !tasks.is_empty()=>(),
             accepted=listener.accept()=>{
-                let (stream,_)=accepted.map_err(|e|HelperError::transport("accept helper client",e))?;
+                let stream=match accepted{Ok((stream,_))=>stream,Err(error)=>{eprintln!("accept helper client: {error}");tokio::time::sleep(Duration::from_millis(100)).await;continue;}};
                 if let Ok(permit)=slots.clone().try_acquire_owned(){
                     let service=service.clone();let stop=shutdown.child_token();
                     tasks.spawn(async move {let _permit=permit;if let Err(error)=serve_connection(service,stream,uid,stop).await{eprintln!("helper connection error: {error}");}});

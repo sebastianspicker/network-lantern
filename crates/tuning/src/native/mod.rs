@@ -55,6 +55,57 @@ fn component_for_step(step: &crate::TuningStep) -> TuningComponent {
     }
 }
 
+/// QoS policy prefixes this tool owns; Apply, Backup and Verify touch only these.
+#[cfg(any(windows, test))]
+const OWNED_QOS_PREFIXES: &[&str] = &[
+    "NETWORK_LANTERN_QOS_PORT_",
+    "NETWORK_LANTERN_QOS_APP_",
+    "NDS_QOS_PORT_",
+    "NDS_QOS_APP_",
+];
+/// Generic legacy prefixes that unrelated policies may share.
+#[cfg(any(windows, test))]
+const LEGACY_GENERIC_QOS_PREFIXES: &[&str] = &["QoS_UDP_TS_", "QoS_UDP_CS2_", "QoS_APP_"];
+
+/// Whether a QoS policy is ours to read and delete. `restore_names` is the
+/// desired set of the backup being restored (empty outside Restore): a
+/// legacy-generic name counts only when that exact name is in it.
+#[cfg(any(windows, test))]
+pub(crate) fn managed_qos_name(name: &str, restore_names: &[String]) -> bool {
+    // `get` instead of slicing: a non-ASCII policy name must not panic the helper.
+    let has_prefix = |prefixes: &[&str]| {
+        prefixes.iter().any(|prefix| {
+            name.get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        })
+    };
+    has_prefix(OWNED_QOS_PREFIXES)
+        || (has_prefix(LEGACY_GENERIC_QOS_PREFIXES)
+            && restore_names
+                .iter()
+                .any(|restore| restore.eq_ignore_ascii_case(name)))
+}
+
+/// Apply keeps the oldest verified backup: `Ok(None)` means none exists and one
+/// must be published, `Ok(Some(_))` keeps the verified bundle, and a present but
+/// unverifiable folder refuses Apply rather than overwriting it.
+#[cfg(any(windows, test))]
+pub(crate) fn apply_backup_decision<T>(
+    folder: &Path,
+    present: bool,
+    validate: impl FnOnce() -> Result<T>,
+) -> Result<Option<T>> {
+    if !present {
+        return Ok(None);
+    }
+    validate().map(Some).map_err(|error| {
+        TuningError::BackupInvalid(format!(
+            "existing backup at {} could not be verified ({error}); move it aside before applying",
+            folder.display()
+        ))
+    })
+}
+
 pub(crate) fn validate_backup_acl(path: &Path) -> Result<()> {
     #[cfg(windows)]
     return windows::validate_backup_acl(path);
@@ -139,4 +190,52 @@ fn validate_unix_private_path(path: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qos_classification_owns_only_project_prefixes_outside_restore() {
+        for owned in ["NETWORK_LANTERN_QOS_PORT_3074", "nds_qos_app_0"] {
+            assert!(managed_qos_name(owned, &[]));
+        }
+        // "QoS_APPé…" puts a char boundary inside the 8-byte "QoS_APP_" prefix.
+        for foreign in [
+            "QoS_APP_Teams",
+            "QoS_UDP_TS_9987",
+            "Corporate VoIP",
+            "QoS_APPé_x",
+        ] {
+            assert!(!managed_qos_name(foreign, &[]));
+        }
+        let restore = vec!["QoS_APP_0".to_owned()];
+        assert!(managed_qos_name("QoS_APP_0", &restore));
+        // WMI policy names are case-insensitive, so the backup's spelling may differ.
+        assert!(managed_qos_name("qos_app_0", &restore));
+        assert!(!managed_qos_name("QoS_APP_Teams", &restore));
+        assert!(!managed_qos_name(
+            "Corporate VoIP",
+            &["Corporate VoIP".into()]
+        ));
+    }
+
+    #[test]
+    fn apply_keeps_a_verified_backup_and_refuses_an_unverifiable_one() {
+        let folder = Path::new("/backup/NetworkLantern");
+        let absent = apply_backup_decision(folder, false, || -> Result<()> {
+            panic!("an absent folder is not validated")
+        });
+        assert!(matches!(absent, Ok(None)));
+        assert!(matches!(
+            apply_backup_decision(folder, true, || Ok("bundle")),
+            Ok(Some("bundle"))
+        ));
+        let refused = apply_backup_decision(folder, true, || -> Result<()> {
+            Err(TuningError::BackupInvalid("digest mismatch".into()))
+        });
+        let message = refused.unwrap_err().to_string();
+        assert!(message.contains("/backup/NetworkLantern") && message.contains("digest mismatch"));
+    }
 }

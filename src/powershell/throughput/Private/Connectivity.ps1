@@ -300,6 +300,9 @@ function Get-TestSuiteConnectivity {
   }
   if ($stack -eq 'None') {
     $stack = Get-Iperf3StackFromTcpResult -Tcp $net.Tcp
+    if ($IpVersion -in @('IPv4', 'IPv6') -and $stack -ne $IpVersion) {
+      throw "IpVersion $IpVersion was requested, but the TCP connection to '$Target' used $stack. Use -IpVersion $stack or Auto, or a target address of the requested family."
+    }
     Write-Verbose "Using stack $stack from TCP connection."
   }
   $mtuFails = @()
