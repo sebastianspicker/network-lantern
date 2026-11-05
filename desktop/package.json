@@ -9,7 +9,7 @@
     "build": "npm run check && vite build && node scripts/check-production.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.10.1"
+    "@tauri-apps/api": "^2.12.4"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
