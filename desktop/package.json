@@ -14,7 +14,7 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "vite": "^7.3.7",
-    "@wdio/tauri-plugin": "^1.0.0"
+    "@wdio/tauri-plugin": "^1.5.1"
   },
   "overrides": {
     "serialize-javascript": "7.0.5"
