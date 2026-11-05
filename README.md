@@ -2,6 +2,8 @@
 
 **Collect path and throughput evidence from a source checkout, and optionally inspect or change a limited set of Windows network settings.**
 
+> _Claude was used to polish and proof-read the code and documentation of this repository._
+
 [![CI](https://github.com/sebastianspicker/network-lantern/actions/workflows/ci.yml/badge.svg)](https://github.com/sebastianspicker/network-lantern/actions/workflows/ci.yml)
 [![Rust migration](https://github.com/sebastianspicker/network-lantern/actions/workflows/rust.yml/badge.svg)](https://github.com/sebastianspicker/network-lantern/actions/workflows/rust.yml)
 [![Pages](https://github.com/sebastianspicker/network-lantern/actions/workflows/pages.yml/badge.svg)](https://github.com/sebastianspicker/network-lantern/actions/workflows/pages.yml)
@@ -241,7 +243,8 @@ verified on matching hosts, so treat the Rust surfaces as in-progress. See
 | `scripts/` | Development, verification, and shell wrappers; not a product API |
 
 See [docs/architecture.md](docs/architecture.md) for component ownership,
-dependency direction, runtime flows, and security boundaries.
+dependency direction, runtime flows, and security boundaries. New contributors
+should start with [How the Rust application runs](docs/architecture.md#how-the-rust-application-runs).
 
 ## Development and testing
 

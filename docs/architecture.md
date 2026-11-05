@@ -22,6 +22,10 @@ workflow. The capabilities share repository conventions but not a probe model or
 result schema. The sections up to [Trust and privilege
 boundaries](#trust-and-privilege-boundaries) describe the legacy reference.
 
+New to the code? Start with [How the Rust application
+runs](#how-the-rust-application-runs): it shows the processes, what happens when
+you start a measurement, what lands on disk, and the files to read first.
+
 ## System context
 
 ```mermaid
@@ -290,12 +294,47 @@ See [SECURITY.md](../SECURITY.md) for reporting and operator guidance.
 
 ## Build and deployment boundaries
 
-There is no compile or packaging stage for the legacy tools. Operator adapters
-and modules run from the checkout; the private throughput reader is compiled once
-per PowerShell process when loaded. CI runs the cross-shell gate on Ubuntu and the
-PowerShell gate on Windows. Node.js 22+ is a development-only prerequisite for the
-private static planner tests. The static planner is served as ordinary files, and
-`.github/workflows/pages.yml` publishes `site/` to GitHub Pages.
+Nothing is packaged or released: no installer, tag or published package. CI
+checks the checkout, and the only deployment is the static planner.
+
+```mermaid
+flowchart LR
+  dev((Maintainer))
+  local["scripts/ci-local.sh"]
+  subgraph gh [GitHub Actions]
+    ci["ci.yml<br/>legacy gate"]
+    rust["rust.yml<br/>4-OS native build"]
+    sec["security.yml<br/>secret scan"]
+    pages["pages.yml<br/>deploy site/"]
+  end
+  site[(GitHub Pages)]
+  dev -->|runs locally| local
+  dev -->|"PR to main / manual"| ci
+  dev -->|"PR to main / manual"| rust
+  dev -->|"push, PR, weekly"| sec
+  dev -->|manual, main only| pages
+  pages -->|upload site/| site
+```
+
+`ci-local.sh` is the authoritative gate: it runs `scripts/ci-legacy.sh`
+(ShellCheck, secret scan, PSScriptAnalyzer) and then `scripts/ci-rust.sh`
+(TypeScript check and build, `cargo fmt`, Clippy with `-D warnings`, workspace
+tests, CLI, desktop and helper builds). `ci.yml` and `rust.yml` repeat those
+phases on GitHub (Ubuntu and Windows for the legacy gate; Ubuntu 22.04, Windows
+and both macOS architectures for Rust), but their jobs run only on manual
+dispatch or Dependabot pull requests. `security.yml` runs on every push and pull
+request to `main` and weekly. `pages.yml` publishes `site/` only when started
+manually from `main`.
+
+There is no compile step for the legacy tools: adapters and modules run from the
+checkout, and the private throughput reader is compiled once per PowerShell
+process when loaded. Node.js 22+ is a development prerequisite for the desktop
+frontend build and the private static planner tests.
+
+Where in the code: [scripts/ci-local.sh](../scripts/ci-local.sh),
+[scripts/ci-rust.sh](../scripts/ci-rust.sh),
+[scripts/ci-legacy.sh](../scripts/ci-legacy.sh),
+[.github/workflows/](../.github/workflows/).
 
 ## Invariants and extension points
 
@@ -322,6 +361,192 @@ default path targets across `config/hosts.conf` and the legacy and Rust path
 engines.
 
 The complete validation command is documented in [TESTING.md](TESTING.md).
+
+## How the Rust application runs
+
+The Rust application is one library, `lantern-runtime`, with two front ends: the
+`network-lantern` CLI and the Tauri desktop. Both run measurements in their own
+process. Only when a privileged helper is registered do probes cross a process
+boundary.
+
+### Processes and where state lives
+
+What runs where, and how the pieces talk:
+
+```mermaid
+flowchart LR
+  op((Operator))
+  subgraph app [Operator process]
+    cli["network-lantern CLI"]
+    ui["desktop/src webview"]
+    host["Tauri host"]
+    runtime["lantern-runtime"]
+    engines["path and throughput engines"]
+  end
+  subgraph priv [Privileged service, optional]
+    helper["network-lantern-helper"]
+  end
+  net(("Targets and<br/>iperf3 server"))
+  disk[("logs/RUN-ID/<br/>profiles, hosts.conf")]
+  op -->|command line| cli
+  op -->|clicks| ui
+  ui -->|"Tauri invoke"| host
+  cli -->|library call| runtime
+  host -->|library call| runtime
+  runtime -->|in-process| engines
+  runtime -->|"signed request<br/>pipe, socket or XPC"| helper
+  engines -->|"ICMP, UDP, TCP"| net
+  helper -->|"ICMP, UDP, TCP"| net
+  runtime -->|"atomic JSON writes"| disk
+  classDef focus fill:#93c5fd,stroke:#1d4ed8,color:#0f172a
+  class runtime focus
+```
+
+- **`lantern-runtime`** is where every request goes. It resolves configuration
+  layers, builds the plan, owns the single active run, picks in-process sockets
+  or the helper, and writes records. The front ends contain no measurement logic.
+- **CLI**: one process per command. `--dry-run` stops after planning; a live run
+  installs SIGINT/SIGTERM handlers that cancel the run and map to `130`/`143`.
+- **Desktop**: the webview (`desktop/src`) calls typed `#[tauri::command]`
+  functions in the Tauri host, which calls the runtime and spawns live runs as
+  background tasks. The webview polls `run_status` every 250 ms.
+- **`network-lantern-helper`** (crate `lantern-helper`) runs as a Windows service
+  (named pipe), a systemd unit with polkit (Unix socket) or a signed macOS daemon
+  (XPC). It is optional: without it, probes use whatever sockets the operator
+  process may open (see [Native socket access](RUST.md#native-socket-access)).
+- **Disk**: run records go below `--out` (default `logs/`), profiles in
+  `.iperf3/profiles.json`, and host defaults come from `config/hosts.conf`, all
+  relative to the launch directory.
+
+Where in the code: [crates/cli/src/main.rs](../crates/cli/src/main.rs),
+[desktop/src-tauri/src/main.rs](../desktop/src-tauri/src/main.rs),
+[crates/runtime/src/lib.rs](../crates/runtime/src/lib.rs),
+[crates/helper/src/bin/network-lantern-helper.rs](../crates/helper/src/bin/network-lantern-helper.rs),
+[deployment/helper/](../deployment/helper/).
+
+### Starting a measurement from the desktop
+
+What happens between "Review plan" and a finished report:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as Operator
+  participant ui as Webview
+  participant host as Tauri host
+  participant rt as lantern-runtime
+  participant helper as Helper service
+  participant net as Target
+  U->>ui: Review plan
+  ui->>host: invoke plan(request)
+  host->>rt: prepare_local_request, plan_request
+  host-->>ui: plan, counts, warnings
+  U->>ui: Start run
+  ui->>host: invoke start_run(request, out)
+  host->>rt: reserve_request
+  host-->>ui: run_id
+  host-)rt: spawn execute_prepared
+  rt->>helper: status (once per run)
+  loop each planned measurement
+    alt helper registered and authorized
+      rt->>helper: signed operation + reviewed hash
+      helper->>net: probes
+      helper-->>rt: result
+    else no helper
+      rt->>net: probes from in-process sockets
+    end
+    rt->>rt: write measurement-N.json
+  end
+  rt->>rt: write summary.json
+  ui->>host: invoke run_status (every 250 ms)
+  host-->>ui: RunState, counts, summary path
+```
+
+Steps 1–4 only plan: no DNS lookup, socket, helper call or file write. The
+webview keeps the reviewed request (with the tuning plan's reviewed hash), and
+step 6 sends exactly that request; if any
+input changed, Start is unavailable until the plan is reviewed again. Step 8
+returns at once, and step 9 runs the measurement in the background. Step 10 decides
+once per run whether the helper is used. Every helper request carries the run
+ID, a nonce and the hash of the reviewed operation; the helper checks the peer,
+signature and replay before probing. Records are published atomically one by one
+(steps 15–16), so a cancelled run keeps what it completed.
+
+The CLI follows the same path in one process: `measurement()` calls
+`prepare_local_request` and `plan_request`, prints the plan on `--dry-run`, and
+otherwise calls `execute_request_with_exit_code`, which reserves the run and
+executes it in the foreground.
+
+Where in the code:
+[desktop/src/plan.ts](../desktop/src/plan.ts) (`startRun`),
+[desktop/src/run.ts](../desktop/src/run.ts) (`pollRun`),
+[desktop/src-tauri/src/main.rs](../desktop/src-tauri/src/main.rs) (`plan`, `start_run`),
+[crates/runtime/src/execution.rs](../crates/runtime/src/execution.rs)
+(`reserve_request`, `execute_prepared`),
+[crates/runtime/src/native.rs](../crates/runtime/src/native.rs) (`NativeExecution`),
+[crates/helper/src/server.rs](../crates/helper/src/server.rs) (`handle`),
+[crates/cli/src/main.rs](../crates/cli/src/main.rs) (`measurement`).
+
+### Run lifecycle
+
+The states the desktop shows for a run, as reported by `RunManager`:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Running: reserve_request
+  Running --> Cancelling: cancel_run
+  Running --> Succeeded: exit 0
+  Running --> PartialFailure: some measurements failed
+  Running --> Failed: none succeeded or error
+  Cancelling --> Cancelled
+  Succeeded --> [*]
+  PartialFailure --> [*]
+  Failed --> [*]
+  Cancelled --> [*]
+```
+
+Only one run can be active per `RunManager`, and a second start is rejected. The
+end state comes from the run's exit code (`RunState::from_exit_code`); threshold
+breaches and partly failed hosts end as `PartialFailure`, not `Failed`. Exit codes
+are listed in [Process status](RUST.md#process-status).
+
+Where in the code: [crates/runtime/src/manager.rs](../crates/runtime/src/manager.rs).
+
+### What a run writes
+
+Each live run creates `<out>/<run-id>/`, with `<out>` defaulting to `logs`:
+
+| File | Written by | Contents |
+| --- | --- | --- |
+| `<out>/.measurement.lock` | `execute_prepared` | Sidecar lock that keeps two runs out of the same output root |
+| `run.log` | `run_log` | Owner-only diagnostic log when logging is enabled |
+| `preflight-N.json` | throughput runs | Reachability, TCP port and MTU checks before the matrix |
+| `measurement-N.json` | every measurement | One result with `schema_version` and engine `provenance` |
+| `summary.json` | end of run | Plan, counts, status, exit code, capped warnings |
+
+A run with measurement files but no `summary.json` is listed as `Incomplete` by
+`runs list`. Reader limits and the legacy formats the readers accept are in
+[Saved data](RUST.md#saved-data).
+
+Where in the code: [crates/runtime/src/execution.rs](../crates/runtime/src/execution.rs),
+[crates/runtime/src/reports/](../crates/runtime/src/reports/),
+[crates/runtime/src/profiles.rs](../crates/runtime/src/profiles.rs).
+
+### Where to start reading
+
+In the order a newcomer would follow one request:
+
+| Path | Responsibility |
+| --- | --- |
+| [crates/cli/src/main.rs](../crates/cli/src/main.rs) | Commands and flags, request building, signal handling |
+| [crates/runtime/src/request.rs](../crates/runtime/src/request.rs) | Parses a JSON request into a typed capability |
+| [crates/runtime/src/application.rs](../crates/runtime/src/application.rs) | `plan_request`, `doctor`, helper operations |
+| [crates/runtime/src/execution.rs](../crates/runtime/src/execution.rs) | Runs a reviewed plan, writes records, decides the exit code |
+| [crates/runtime/src/native.rs](../crates/runtime/src/native.rs) | Helper or in-process sockets, per run |
+| `crates/path-basic`, `path-trace`, `throughput` | The measurement engines |
+| [crates/helper/src/server.rs](../crates/helper/src/server.rs) | Authorization, replay and cancellation in the helper |
+| [desktop/src-tauri/src/main.rs](../desktop/src-tauri/src/main.rs) | Tauri commands and shutdown handling |
+| [desktop/src/main.ts](../desktop/src/main.ts) | Frontend entry; `plan.ts` and `run.ts` drive a run |
 
 ## Rust application boundaries
 
