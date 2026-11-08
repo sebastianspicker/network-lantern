@@ -54,10 +54,7 @@ use windows_sys::Win32::{
         Pipes::{
             GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, ImpersonateNamedPipeClient,
         },
-        Threading::{
-            GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
-            PROCESS_QUERY_LIMITED_INFORMATION,
-        },
+        Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
     },
     UI::Shell::{CSIDL_COMMON_APPDATA, SHGFP_TYPE_CURRENT, SHGetFolderPathW},
 };
@@ -435,7 +432,8 @@ fn authenticate_server(pipe: &tokio::net::windows::named_pipe::NamedPipeClient) 
     if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle() as HANDLE, &mut pid) } == 0 {
         return Err(last("identify Windows helper service"));
     }
-    if process_sid(pid)? != "S-1-5-18" {
+    // The client cannot read a SYSTEM process token, so it trusts the service manager's PID.
+    if pid != service::running_process_id()? {
         return Err(HelperError::Authentication);
     }
     Ok(())
@@ -467,16 +465,6 @@ fn authenticate_client(pipe: &NamedPipeServer) -> Result<(String, u32)> {
 
 fn current_process_sid() -> Result<String> {
     process_token_sid(unsafe { GetCurrentProcess() })
-}
-
-fn process_sid(pid: u32) -> Result<String> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return Err(last("open peer process"));
-    }
-    let result = process_token_sid(process);
-    unsafe { CloseHandle(process) };
-    result
 }
 
 fn process_token_sid(process: HANDLE) -> Result<String> {

@@ -187,9 +187,83 @@ fn validate_unix_private_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Ancestors of a backup folder must be owned by SYSTEM, Administrators or
+/// TrustedInstaller (which has no SDDL alias, so it appears as its SID).
+#[cfg(any(windows, test))]
+pub(crate) fn trusted_backup_owner(sddl: &str) -> bool {
+    const TRUSTED_INSTALLER: &str =
+        "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+    let Some(rest) = sddl.strip_prefix("O:") else {
+        return false;
+    };
+    // The owner ends where the group (`G:`) or DACL (`D:`) section starts.
+    let end = ["G:", "D:", "S:"]
+        .iter()
+        .filter_map(|tag| rest.find(tag))
+        .min()
+        .unwrap_or(rest.len());
+    matches!(&rest[..end], "SY" | "BA" | TRUSTED_INSTALLER)
+}
+
+/// Whether the DACL lets a broad principal write.
+#[cfg(any(windows, test))]
+pub(crate) fn grants_untrusted_write(sddl: &str) -> bool {
+    sddl.split('(')
+        .skip(1)
+        .filter_map(|ace| ace.split_once(')').map(|value| value.0))
+        .any(|ace| {
+            let fields = ace.split(';').collect::<Vec<_>>();
+            // Inherit-only (`IO`) ACEs grant nothing on this folder itself. Flags are
+            // two-letter codes run together, so compare whole codes, not substrings.
+            let inherit_only = fields
+                .get(1)
+                .is_some_and(|flags| flags.as_bytes().chunks(2).any(|code| code == b"IO"));
+            if fields.len() < 6
+                || fields[0] != "A"
+                || inherit_only
+                || !matches!(fields[5], "WD" | "AU" | "BU" | "AN")
+            {
+                return false;
+            }
+            let rights = fields[2];
+            ["GA", "GW", "FA", "FW", "WD", "AD", "DC", "WO"]
+                .iter()
+                .any(|value| rights.contains(value))
+                || rights
+                    .strip_prefix("0x")
+                    .and_then(|value| u32::from_str_radix(value, 16).ok())
+                    .is_some_and(|mask| mask & 0x4000_0000 != 0 || mask & 0x000d_0116 != 0)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TI: &str = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+    #[test]
+    fn backup_ancestor_owner_accepts_trusted_installer_by_sid() {
+        assert!(trusted_backup_owner("O:SYG:SYD:P(A;;FA;;;SY)"));
+        assert!(trusted_backup_owner("O:BAD:P(A;;FA;;;SY)"));
+        assert!(trusted_backup_owner(&format!("O:{TI}G:SYD:(A;;FA;;;SY)")));
+        // A longer SID that merely starts with TrustedInstaller's is someone else.
+        assert!(!trusted_backup_owner(&format!("O:{TI}1G:SYD:(A;;FA;;;SY)")));
+        assert!(!trusted_backup_owner("O:BUG:BUD:(A;;FA;;;SY)"));
+        assert!(!trusted_backup_owner("O:S-1-5-21-1-2-3-1001D:(A;;FA;;;SY)"));
+    }
+
+    #[test]
+    fn inherit_only_aces_do_not_grant_write_on_the_ancestor_itself() {
+        // CREATOR OWNER-style inherit-only grants apply to children, not this folder.
+        assert!(!grants_untrusted_write("O:SYD:(A;OICIIO;GA;;;BU)"));
+        assert!(!grants_untrusted_write("O:SYD:(A;CIIOID;FW;;;AU)"));
+        // `CI` + `OI` contains the letters "IO" but is not inherit-only.
+        assert!(grants_untrusted_write("O:SYD:(A;CIOI;FA;;;BU)"));
+        assert!(grants_untrusted_write("O:SYD:(A;OICI;0x40000000;;;WD)"));
+        assert!(grants_untrusted_write("O:SYD:(A;;FW;;;AU)"));
+        assert!(!grants_untrusted_write("O:SYD:(A;OICI;FR;;;BU)"));
+    }
 
     #[test]
     fn qos_classification_owns_only_project_prefixes_outside_restore() {

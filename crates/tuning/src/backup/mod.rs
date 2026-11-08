@@ -57,9 +57,11 @@ pub fn validate_backup_bundle(folder: &Path) -> Result<BackupBundle> {
         Some(&directory),
     )?;
     let manifest = parse_manifest_bounded(&bytes)?;
-    if manifest.schema_version > 3 {
+    // Schema 4 is what the legacy engine writes when it backs up TcpipQos; the
+    // per-artifact digests and parsers below still apply to it.
+    if manifest.schema_version > 4 {
         return Err(TuningError::BackupIncompatible(format!(
-            "schema {} is newer than supported schema 3",
+            "schema {} is newer than supported schema 4",
             manifest.schema_version
         )));
     }
@@ -203,4 +205,48 @@ pub(crate) fn reject_link(path: &Path, directory: bool) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn private(path: &Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// The legacy PowerShell engine writes schema 4 when it backs up `TcpipQos`.
+    #[test]
+    fn bundle_validation_accepts_legacy_schema_four_with_tcpip_qos() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().canonicalize().unwrap().join("bundle");
+        fs::create_dir(&folder).unwrap();
+        private(&folder, 0o700);
+        let plan = b"8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c".to_vec();
+        let qos = artifacts::render_registry_export(&[(
+            r"SYSTEM\CurrentControlSet\Services\Tcpip\QoS",
+            vec![(
+                "Do not use NLA",
+                artifacts::RegistryValue::String("1".into()),
+            )],
+        )])
+        .into_bytes();
+        let manifest = format!(
+            r#"{{"SchemaVersion":4,"ToolName":"network-lantern","Components":{{"SystemProfile":false,"AfdParameters":false,"TcpipQos":true,"QosPolicies":false,"NicAdvanced":false,"NicRsc":false,"PowerPlan":true}},"ArtifactDigests":{{"Tcpip_QoS.reg":"{}","powerplan.txt":"{}"}}}}"#,
+            sha256_upper(&qos),
+            sha256_upper(&plan)
+        );
+        for (name, bytes) in [
+            ("backup_manifest.json", manifest.into_bytes()),
+            ("Tcpip_QoS.reg", qos),
+            ("powerplan.txt", plan),
+        ] {
+            fs::write(folder.join(name), bytes).unwrap();
+            private(&folder.join(name), 0o600);
+        }
+        let bundle = validate_backup_bundle(&folder).unwrap();
+        assert_eq!(bundle.manifest().schema_version, 4);
+        assert!(bundle.artifact(ArtifactKind::TcpipQos).is_some());
+    }
 }

@@ -1353,13 +1353,13 @@ pub(super) fn validate_backup_parent(path: &Path) -> Result<()> {
                 ancestor,
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             )?;
-            if !sddl.starts_with("O:SY") && !sddl.starts_with("O:BA") && !sddl.starts_with("O:TI") {
+            if !super::trusted_backup_owner(&sddl) {
                 return Err(TuningError::BackupInvalid(format!(
                     "backup ancestor is not owned by SYSTEM, Administrators, or TrustedInstaller: {}",
                     ancestor.display()
                 )));
             }
-            if grants_untrusted_write(&sddl) {
+            if super::grants_untrusted_write(&sddl) {
                 return Err(TuningError::BackupInvalid(format!(
                     "backup ancestor grants write access to an untrusted broad principal: {}",
                     ancestor.display()
@@ -1559,29 +1559,6 @@ fn descriptor_sddl(descriptor: PSECURITY_DESCRIPTOR, information: u32) -> Result
             .to_owned();
     unsafe { LocalFree(string.cast()) };
     Ok(value)
-}
-
-fn grants_untrusted_write(sddl: &str) -> bool {
-    sddl.split('(')
-        .skip(1)
-        .filter_map(|ace| ace.split_once(')').map(|value| value.0))
-        .any(|ace| {
-            let fields = ace.split(';').collect::<Vec<_>>();
-            if fields.len() < 6
-                || fields[0] != "A"
-                || !matches!(fields[5], "WD" | "AU" | "BU" | "AN")
-            {
-                return false;
-            }
-            let rights = fields[2];
-            ["GA", "GW", "FA", "FW", "WD", "AD", "DC", "WO"]
-                .iter()
-                .any(|value| rights.contains(value))
-                || rights
-                    .strip_prefix("0x")
-                    .and_then(|value| u32::from_str_radix(value, 16).ok())
-                    .is_some_and(|mask| mask & 0x4000_0000 != 0 || mask & 0x000d_0116 != 0)
-        })
 }
 
 fn reject_reparse(path: &Path) -> Result<()> {

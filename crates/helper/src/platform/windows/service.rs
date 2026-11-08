@@ -369,7 +369,29 @@ fn open_manager(access: u32) -> Result<ScHandle> {
     )
 }
 
+/// Process ID of the running helper service, which the client requires the pipe
+/// server to be (a squatter cannot share this PID).
+pub(super) fn running_process_id() -> Result<u32> {
+    let manager = open_manager(SC_MANAGER_CONNECT)?;
+    let name = wide(SERVICE_NAME);
+    let service = ScHandle::new(
+        unsafe { OpenServiceW(manager.0, name.as_ptr(), SERVICE_QUERY_STATUS) },
+        "open Windows helper service",
+    )?;
+    let status = query_status(&service)?;
+    if status.dwCurrentState != SERVICE_RUNNING || status.dwProcessId == 0 {
+        return Err(HelperError::Unavailable(
+            "Windows helper service is not running".into(),
+        ));
+    }
+    Ok(status.dwProcessId)
+}
+
 fn query_state(service: &ScHandle) -> Result<u32> {
+    query_status(service).map(|status| status.dwCurrentState)
+}
+
+fn query_status(service: &ScHandle) -> Result<SERVICE_STATUS_PROCESS> {
     let mut status = SERVICE_STATUS_PROCESS::default();
     let mut needed = 0;
     if unsafe {
@@ -384,7 +406,7 @@ fn query_state(service: &ScHandle) -> Result<u32> {
     {
         return Err(last("query Windows helper service state"));
     }
-    Ok(status.dwCurrentState)
+    Ok(status)
 }
 
 fn wait_service_state(service: &ScHandle, expected: u32) -> Result<()> {
