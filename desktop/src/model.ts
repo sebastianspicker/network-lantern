@@ -404,5 +404,5 @@ export function runsStatus(page: RunsPage): string {
 }
 
 export function rowsPageLabel(offset: number, next: number, total: number): string {
-  return `${offset}–${next} of ${total}`;
+  return total ? `${offset + 1}–${next} of ${total}` : '0 of 0';
 }

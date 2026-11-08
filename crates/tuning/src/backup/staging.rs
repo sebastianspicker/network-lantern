@@ -300,7 +300,6 @@ mod tests {
     fn staged_artifact_tampering_is_detected_before_consumption() {
         let bytes = b"8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c".to_vec();
         let bundle = BackupBundle {
-            folder: PathBuf::from("unused"),
             manifest: BackupManifest {
                 schema_version: 3,
                 tool_name: "network-lantern".into(),
@@ -379,7 +378,6 @@ mod tests {
     fn power_plan_bundle() -> BackupBundle {
         let bytes = b"8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c".to_vec();
         BackupBundle {
-            folder: PathBuf::from("unused"),
             manifest: BackupManifest {
                 schema_version: 3,
                 tool_name: "network-lantern".into(),

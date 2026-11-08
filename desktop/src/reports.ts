@@ -161,8 +161,9 @@ export function setupReports() {
     }
   });
   $('read-report').addEventListener('click', () => void readReport(0));
-  $('rows-next').addEventListener('click', () => void readReport(reports.nextRows, reports.selected, 'next'));
-  $('rows-prev').addEventListener('click', () => void readReport(reports.rowHistory.at(-1) || 0, reports.selected, 'prev'));
+  // `selected` is empty while a page loads; a second click would read path ''.
+  $('rows-next').addEventListener('click', () => { if (reports.selected) void readReport(reports.nextRows, reports.selected, 'next'); });
+  $('rows-prev').addEventListener('click', () => { if (reports.selected) void readReport(reports.rowHistory.at(-1) || 0, reports.selected, 'prev'); });
   $('compare').addEventListener('click', () => void compareReport());
   $('export').addEventListener('click', () => void exportReport());
 }

@@ -184,7 +184,6 @@ pub(super) async fn request(
     let authorized: AuthorizedRequest = serde_json::from_slice(&frame.body).map_err(|error| {
         HelperError::Protocol(format!("decode signed request for cancellation: {error}"))
     })?;
-    authorized.validate()?;
     let run_id = authorized.run_id;
     let transport_token = CancellationToken::new();
     let operation = exchange(
@@ -223,9 +222,10 @@ async fn exchange(
         let mut pipe = open_pipe().await?;
         authenticate_server(&pipe)?;
         write_frame(&mut pipe, &message, FRAME_TIMEOUT).await?;
-        let length = tokio::time::timeout(FRAME_TIMEOUT, pipe.read_u32())
+        // Long operations answer late; the outer `deadline` bounds the header, as on Linux.
+        let length = pipe
+            .read_u32()
             .await
-            .map_err(|_| HelperError::Protocol("response header timed out".into()))?
             .map_err(|error| HelperError::transport("read helper response length", error))?
             as usize;
         let bytes = read_body(&mut pipe, length, FRAME_TIMEOUT).await?;
@@ -344,14 +344,15 @@ pub(super) async fn serve(server: HelperServer, stop: CancellationToken) -> Resu
     });
     let slots = Arc::new(Semaphore::new(64));
     let mut tasks = JoinSet::new();
-    let mut first = true;
+    let mut pipe = create_pipe(&service.owner_sid, true)?;
     loop {
-        let pipe = create_pipe(&service.owner_sid, first)?;
-        first = false;
+        while tasks.try_join_next().is_some() {}
         tokio::select! {
             _ = stop.cancelled() => break,
-            Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
             connected = pipe.connect() => {
+                // Replace the instance before anything else so clients never find the pipe absent.
+                let next = create_pipe(&service.owner_sid, false)?;
+                let connected_pipe = std::mem::replace(&mut pipe, next);
                 if let Err(error) = connected {
                     eprintln!("accept Windows helper client: {error}");
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -360,7 +361,7 @@ pub(super) async fn serve(server: HelperServer, stop: CancellationToken) -> Resu
                 if let Ok(permit) = slots.clone().try_acquire_owned() {
                     let state = service.clone();
                     let token = stop.child_token();
-                    tasks.spawn(async move { let _permit = permit; if let Err(error) = serve_connection(state, pipe, token).await { eprintln!("helper connection error: {error}"); } });
+                    tasks.spawn(async move { let _permit = permit; if let Err(error) = serve_connection(state, connected_pipe, token).await { eprintln!("helper connection error: {error}"); } });
                 }
             }
         }

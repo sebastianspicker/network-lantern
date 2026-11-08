@@ -8,7 +8,6 @@ mod windows;
 pub(crate) async fn execute(
     plan: &TuningPlan,
     cancellation: &CancellationToken,
-    inspect_only: bool,
 ) -> Result<TuningResult> {
     if cancellation.is_cancelled() {
         return Err(TuningError::Cancelled);
@@ -27,11 +26,10 @@ pub(crate) async fn execute(
     }
     #[cfg(windows)]
     {
-        return windows::execute(plan, cancellation, inspect_only).await;
+        return windows::execute(plan, cancellation).await;
     }
     #[cfg(not(windows))]
     {
-        let _ = inspect_only;
         Err(TuningError::Unsupported(
             "Windows tuning requires the elevated Windows helper".into(),
         ))
@@ -56,7 +54,6 @@ fn component_for_step(step: &crate::TuningStep) -> TuningComponent {
 }
 
 /// QoS policy prefixes this tool owns; Apply, Backup and Verify touch only these.
-#[cfg(any(windows, test))]
 const OWNED_QOS_PREFIXES: &[&str] = &[
     "NETWORK_LANTERN_QOS_PORT_",
     "NETWORK_LANTERN_QOS_APP_",
@@ -64,13 +61,11 @@ const OWNED_QOS_PREFIXES: &[&str] = &[
     "NDS_QOS_APP_",
 ];
 /// Generic legacy prefixes that unrelated policies may share.
-#[cfg(any(windows, test))]
 const LEGACY_GENERIC_QOS_PREFIXES: &[&str] = &["QoS_UDP_TS_", "QoS_UDP_CS2_", "QoS_APP_"];
 
 /// Whether a QoS policy is ours to read and delete. `restore_names` is the
 /// desired set of the backup being restored (empty outside Restore): a
 /// legacy-generic name counts only when that exact name is in it.
-#[cfg(any(windows, test))]
 pub(crate) fn managed_qos_name(name: &str, restore_names: &[String]) -> bool {
     // `get` instead of slicing: a non-ASCII policy name must not panic the helper.
     let has_prefix = |prefixes: &[&str]| {
@@ -108,7 +103,7 @@ pub(crate) fn apply_backup_decision<T>(
 
 pub(crate) fn validate_backup_acl(path: &Path) -> Result<()> {
     #[cfg(windows)]
-    return windows::validate_backup_acl(path);
+    return windows::validate_protected(path);
     #[cfg(not(windows))]
     {
         validate_unix_private_path(path)
@@ -131,7 +126,7 @@ pub(crate) fn staging_parent() -> Result<PathBuf> {
 
 pub(crate) fn validate_staging_parent(path: &Path) -> Result<()> {
     #[cfg(windows)]
-    return windows::validate_staging_parent(path);
+    return windows::validate_staging_chain(path);
     #[cfg(not(windows))]
     {
         if !path.is_dir() {
@@ -145,7 +140,7 @@ pub(crate) fn validate_staging_parent(path: &Path) -> Result<()> {
 
 pub(crate) fn protect_directory(path: &Path) -> Result<()> {
     #[cfg(windows)]
-    return windows::protect_directory(path);
+    return windows::protect(path);
     #[cfg(not(windows))]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -156,7 +151,7 @@ pub(crate) fn protect_directory(path: &Path) -> Result<()> {
 
 pub(crate) fn protect_file(path: &Path) -> Result<()> {
     #[cfg(windows)]
-    return windows::protect_file(path);
+    return windows::protect(path);
     #[cfg(not(windows))]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -167,7 +162,7 @@ pub(crate) fn protect_file(path: &Path) -> Result<()> {
 
 pub(crate) fn validate_staging_path(path: &Path) -> Result<()> {
     #[cfg(windows)]
-    return windows::validate_staging_path(path);
+    return windows::validate_staging_chain(path);
     #[cfg(not(windows))]
     {
         validate_unix_private_path(path)

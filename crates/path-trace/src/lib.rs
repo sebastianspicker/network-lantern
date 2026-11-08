@@ -439,6 +439,7 @@ async fn execute_run_with_probe(
     let started = tokio::time::Instant::now();
     let deadline = started + configured.run_timeout;
     let nonce = rand::random::<u32>();
+    let max_outstanding = path_io::clamp_to_descriptor_limit(MAX_OUTSTANDING_PROBES);
     let mut tasks: JoinSet<(u16, u8, Result<path_io::HopResult, ProbeError>)> = JoinSet::new();
     let mut completed_cycles = 0u16;
     let mut pending = vec![0u16; usize::from(configured.cycles)];
@@ -515,7 +516,7 @@ async fn execute_run_with_probe(
                 }
             }
             _ = tokio::time::sleep_until(cadence.deadline), if cadence.cycles < configured.cycles => {
-                if tasks.len() >= MAX_OUTSTANDING_PROBES {
+                if tasks.len() >= max_outstanding {
                     errors.push("Native probe concurrency limit reached; remaining probes were not sent".into());
                     status = TraceRunStatus::PartialFailure;
                     run_token.cancel();
@@ -579,6 +580,7 @@ async fn execute_run_with_probe(
         .into_iter()
         .enumerate()
         .skip(usize::from(configured.first_ttl))
+        .take_while(|(ttl, _)| destination_bound.is_none_or(|bound| *ttl <= usize::from(bound)))
         .filter_map(|(ttl, values)| values.finish(ttl as u8))
         .collect();
     let mut enrichment_complete = false;
@@ -1053,6 +1055,48 @@ mod tests {
         assert_eq!(result.hops[0].statistics.cancelled, 0);
         assert_eq!(result.hops[0].statistics.loss_percent, 100.0);
         assert!(!result.errors.iter().any(|error| error.contains("shutdown")));
+    }
+
+    fn slow_destination_probe(
+        _: &CycleProbe,
+        _: u16,
+        ttl: u8,
+        _: &CancellationToken,
+    ) -> Result<path_io::HopResult, ProbeError> {
+        // TTL 2 is the destination but replies late, so TTL 3 is already in flight.
+        if ttl == 2 {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let address = (ttl >= 2).then(|| "127.0.0.1".parse().unwrap());
+        Ok(path_io::HopResult {
+            ttl,
+            address,
+            reached_destination: ttl >= 2,
+            samples: vec![Sample {
+                sequence: ttl.into(),
+                hop: address,
+                elapsed_ms: Some(1.0),
+                status: path_io::SampleStatus::Reply,
+                next_hop_mtu: None,
+                mpls: Vec::new(),
+            }],
+        })
+    }
+
+    #[tokio::test]
+    async fn hops_past_the_destination_are_trimmed() {
+        let (item, mut settings) = isolated_trace();
+        settings.max_hops = 4;
+        let result = execute_run_with_probe(
+            &item,
+            &settings,
+            &CancellationToken::new(),
+            slow_destination_probe,
+        )
+        .await
+        .unwrap();
+        let ttls: Vec<_> = result.hops.iter().map(|hop| hop.ttl).collect();
+        assert_eq!(ttls, [1, 2]);
     }
 
     fn failing_probe(

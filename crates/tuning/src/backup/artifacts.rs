@@ -1,4 +1,4 @@
-use crate::{Result, TuningError};
+use crate::{Result, TuningError, plan::valid_windows_exe};
 use quick_xml::{Reader, events::Event};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -461,31 +461,8 @@ fn take_number(values: &mut BTreeMap<String, String>, names: &[&str]) -> Result<
 }
 
 fn managed_name(name: &str) -> bool {
-    [
-        "NETWORK_LANTERN_QOS_PORT_",
-        "NETWORK_LANTERN_QOS_APP_",
-        "NDS_QOS_PORT_",
-        "NDS_QOS_APP_",
-        "QoS_UDP_TS_",
-        "QoS_UDP_CS2_",
-        "QoS_APP_",
-    ]
-    .iter()
-    // `get` instead of slicing: a non-ASCII name in a backup must not panic the helper.
-    .any(|prefix| {
-        name.get(..prefix.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
-    })
-}
-
-fn valid_windows_exe(path: &str) -> bool {
-    path.len() >= 7
-        && path.as_bytes().get(1) == Some(&b':')
-        && path.as_bytes().get(2) == Some(&b'\\')
-        && path.to_ascii_lowercase().ends_with(".exe")
-        && !path.starts_with("\\\\")
-        && !path.starts_with("\\\\?\\")
-        && !path.contains('\0')
+    // A backup may carry legacy-generic names, so list the name itself as restorable.
+    crate::native::managed_qos_name(name, &[name.to_owned()])
 }
 
 fn allowed_xml_tag(name: &[u8]) -> bool {

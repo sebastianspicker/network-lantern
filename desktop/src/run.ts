@@ -21,7 +21,8 @@ function renderRun() {
   const progress = $<HTMLProgressElement>('run-progress');
   progress.max = Math.max(run.total, 1);
   progress.value = run.completed;
-  $('run-logs').textContent = summary.logs;
+  // Rewriting unchanged text every poll would clear the user's selection.
+  if ($('run-logs').textContent !== summary.logs) $('run-logs').textContent = summary.logs;
   control('cancel').disabled = run.state !== 'running';
   $('cancel').hidden = !active(run);
   $('open-run').hidden = !run.report_path;

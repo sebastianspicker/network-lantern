@@ -25,13 +25,14 @@ use std::{
 };
 
 mod pacing;
+pub use pacing::clamp_to_descriptor_limit;
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 use windows::probe_once;
 #[cfg(windows)]
-pub use windows::{native_access, tcp_trace_scoped, udp_trace_scoped};
+pub use windows::{native_access, udp_trace_scoped};
 
 #[cfg(windows)]
 pub fn tcp_trace_probe_scoped(
@@ -62,23 +63,13 @@ pub fn ping(
     parameters: &RoundParameters,
     cancellation: &tokio_util::sync::CancellationToken,
 ) -> Result<Vec<Sample>, ProbeError> {
-    ping_scoped(
+    ping_scoped_with_ttl(
         SocketAddr::new(target, 0),
         count,
-        ttl,
+        Some(ttl),
         parameters,
         cancellation,
     )
-}
-
-pub fn ping_scoped(
-    target: SocketAddr,
-    count: u16,
-    ttl: u8,
-    parameters: &RoundParameters,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<Sample>, ProbeError> {
-    ping_scoped_with_ttl(target, count, Some(ttl), parameters, cancellation)
 }
 
 pub fn ping_scoped_with_ttl(
@@ -535,51 +526,11 @@ fn udp_trace_listener(
     RawIcmpSocket::new(family, timeout).map(Some)
 }
 
-/// Trace TCP. Linux with raw socket access sends hand-built SYN packets and
+/// Trace one TCP probe. Linux with raw socket access sends hand-built SYN packets and
 /// observes SYN-ACK or RST without completing a handshake. macOS/BSD (whose
 /// kernels never deliver TCP segments to raw sockets) and unprivileged Linux
 /// use one kernel `connect()` per probe instead: the destination then sees a
 /// completed handshake immediately followed by RST.
-#[cfg(unix)]
-pub fn tcp_trace_scoped(
-    target: SocketAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    destination_port: u16,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    if first_ttl == 0 || first_ttl > parameters.max_hops || destination_port == 0 {
-        return Err(ProbeError::InvalidPlan(
-            "invalid TCP trace hop or port settings".into(),
-        ));
-    }
-    let family = match target.ip() {
-        IpAddr::V4(_) => AddressFamily::Ipv4,
-        IpAddr::V6(_) => AddressFamily::Ipv6,
-    };
-    match raw_tcp_sender(family)? {
-        Some(sender) => tcp_trace_raw(
-            target,
-            first_ttl,
-            parameters,
-            destination_port,
-            &sender,
-            cancellation,
-        ),
-        None => {
-            log_connect_mode();
-            tcp_trace_connect(
-                target,
-                first_ttl,
-                parameters,
-                destination_port,
-                cancellation,
-            )
-        }
-    }
-}
-
-/// See `tcp_trace_scoped` for the raw and connect modes.
 #[cfg(unix)]
 pub fn tcp_trace_probe_scoped(
     target: SocketAddr,
@@ -668,50 +619,6 @@ fn connect_icmp_listener(
     timeout: Duration,
 ) -> Result<Option<RawIcmpSocket>, ProbeError> {
     RawIcmpSocket::new(family, timeout.min(Duration::from_millis(50))).map(Some)
-}
-
-#[cfg(unix)]
-fn tcp_trace_connect(
-    target: SocketAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    destination_port: u16,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    let family = match target.ip() {
-        IpAddr::V4(_) => AddressFamily::Ipv4,
-        IpAddr::V6(_) => AddressFamily::Ipv6,
-    };
-    let listener = connect_icmp_listener(family, parameters.timeout)?;
-    let mut hops = Vec::new();
-    for ttl in first_ttl..=parameters.max_hops {
-        if cancellation.is_cancelled() {
-            if hops.is_empty() {
-                return Err(ProbeError::Cancelled);
-            }
-            break;
-        }
-        let sample = tcp_connect_probe(
-            target,
-            ttl,
-            parameters,
-            destination_port,
-            listener.as_ref(),
-            cancellation,
-        )?;
-        let reached_destination = sample.status == SampleStatus::Reply;
-        let cancelled = sample.status == SampleStatus::Cancelled;
-        hops.push(HopResult {
-            ttl,
-            address: sample.hop,
-            reached_destination,
-            samples: vec![sample],
-        });
-        if reached_destination || cancelled {
-            break;
-        }
-    }
-    Ok(hops)
 }
 
 /// One connect-mode TCP probe. SYN-ACK (connection established) or RST
@@ -877,77 +784,6 @@ fn tcp_connect_probe(
             }
         }
     }
-}
-
-/// Raw SYN trace (Linux with raw socket access). ICMP quotations identify
-/// intermediate hops; SYN-ACK or RST packets identify the destination without
-/// completing a TCP handshake.
-#[cfg(unix)]
-fn tcp_trace_raw(
-    target: SocketAddr,
-    first_ttl: u8,
-    parameters: &RoundParameters,
-    destination_port: u16,
-    sender: &RawIpSocket,
-    cancellation: &tokio_util::sync::CancellationToken,
-) -> Result<Vec<HopResult>, ProbeError> {
-    let family = match target.ip() {
-        IpAddr::V4(_) => AddressFamily::Ipv4,
-        IpAddr::V6(_) => AddressFamily::Ipv6,
-    };
-    let source = source_for(target)?;
-    let source_port = 49_152u16.wrapping_add(rand::random::<u16>() % 16_383);
-    let listeners = RawTcpListeners::new(family, parameters.timeout)?;
-    let mut hops = Vec::new();
-    for ttl in first_ttl..=parameters.max_hops {
-        if cancellation.is_cancelled() {
-            if hops.is_empty() {
-                return Err(ProbeError::Cancelled);
-            }
-            break;
-        }
-        let sequence = rand::random::<u32>();
-        let spec = TcpSynSpec {
-            source_port,
-            destination_port,
-            sequence,
-            hop_limit: ttl,
-            traffic_class: parameters.traffic_class.unwrap_or(0),
-            dont_fragment: parameters.dont_fragment,
-        };
-        let packet = build_raw_syn(source, target.ip(), &spec)?;
-        let started = Instant::now();
-        let sample = match begin_probe(cancellation, || sender.send_to(&packet, target))? {
-            SendOutcome::Unreachable => unreachable_sample(ttl.into()),
-            SendOutcome::Sent => listeners.wait(
-                ttl,
-                &ProbeKey::tcp(family, source_port, destination_port, Some(sequence)),
-                started + parameters.timeout,
-                started,
-                |response| {
-                    response.source_port == destination_port
-                        && response.destination_port == source_port
-                        && (response.rst
-                            || (response.syn
-                                && response.ack
-                                && response.acknowledgment == sequence.wrapping_add(1)))
-                },
-                cancellation,
-            )?,
-        };
-        let reached_destination = sample.status == SampleStatus::Reply;
-        let cancelled = sample.status == SampleStatus::Cancelled;
-        hops.push(HopResult {
-            ttl,
-            address: sample.hop,
-            reached_destination,
-            samples: vec![sample],
-        });
-        if reached_destination || cancelled {
-            break;
-        }
-    }
-    Ok(hops)
 }
 
 #[cfg(unix)]
@@ -1544,6 +1380,7 @@ const ICMP_PERMISSION_HINT: &str = "run with sudo/root (or grant CAP_NET_RAW on 
 struct RawIcmpSocket {
     fd: OwnedFd,
     kind: SocketKind,
+    buffer: std::cell::RefCell<Vec<u8>>,
 }
 
 #[cfg(unix)]
@@ -1616,7 +1453,11 @@ impl RawIcmpSocket {
             &timeval,
             "set raw socket receive timeout",
         )?;
-        Ok(Self { fd, kind })
+        Ok(Self {
+            fd,
+            kind,
+            buffer: std::cell::RefCell::new(vec![0u8; 65_535]),
+        })
     }
 
     /// Return the echo identifier replies will carry. Linux ping sockets
@@ -1739,7 +1580,7 @@ impl RawIcmpSocket {
 
     /// Read one queued packet without blocking; callers wait with `poll()`.
     fn receive(&self) -> Result<ReceivedPacket, ProbeError> {
-        let mut bytes = vec![0u8; 65_535];
+        let mut bytes = self.buffer.borrow_mut();
         loop {
             let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
             let mut length = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
@@ -1772,9 +1613,11 @@ impl RawIcmpSocket {
                     _ => return Err(socket_error("receive raw ICMP response", error)),
                 }
             }
-            bytes.truncate(received as usize);
             let storage = unsafe { storage.assume_init() };
-            return Ok(Some((bytes, sockaddr_ip(&storage))));
+            return Ok(Some((
+                bytes[..received as usize].to_vec(),
+                sockaddr_ip(&storage),
+            )));
         }
     }
 }

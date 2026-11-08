@@ -1,6 +1,7 @@
 # PSScriptAnalyzer settings: exclude rules that are not practical for this repo.
 # - PSAvoidGlobalVars: test file uses global for InModuleScope fixture visibility.
 # - PSUseShouldProcessForStateChangingFunctions: New-* test/module helpers return in-memory objects only.
+#   Private Remove-* helpers only clean up or roll back the tool's own staging/published files; their public callers gate with ShouldProcess, and -Confirm would otherwise prompt during rollback.
 # - PSUseSingularNouns: Get-BitsPerSecondMbps uses standard unit "Mbps"; Get-NetworkThroughputDefaultParameterSet is singular.
 # - PSUseOutputTypeCorrectly: utility conversion helpers intentionally return heterogeneous scalar/array types.
 @{

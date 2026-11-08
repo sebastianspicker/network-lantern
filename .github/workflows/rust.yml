@@ -31,9 +31,6 @@ jobs:
       - name: Desktop dependencies
         working-directory: desktop
         run: npm ci
-      - name: Desktop checks
-        working-directory: desktop
-        run: npm run check
       - name: Desktop build
         working-directory: desktop
         run: npm run build

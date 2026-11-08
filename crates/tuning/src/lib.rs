@@ -9,8 +9,8 @@ mod types;
 mod verification;
 
 pub use backup::{
-    ArtifactKind, BackupBundle, BackupManifest, BackupManifestComponents, BundleStatus,
-    StagedBackup, parse_manifest_bounded, validate_backup_bundle,
+    ArtifactKind, BackupBundle, BackupManifest, BackupManifestComponents, StagedBackup,
+    parse_manifest_bounded, validate_backup_bundle,
 };
 pub use error::{Result, TuningError};
 pub use plan::plan;
@@ -35,6 +35,6 @@ impl TuningExecutor {
         plan: &TuningPlan,
         cancellation: &CancellationToken,
     ) -> Result<TuningResult> {
-        native::execute(plan, cancellation, false).await
+        native::execute(plan, cancellation).await
     }
 }

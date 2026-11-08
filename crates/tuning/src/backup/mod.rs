@@ -3,16 +3,16 @@ mod manifest;
 #[cfg(any(windows, test))]
 pub(crate) mod persist;
 #[cfg(any(windows, test))]
-pub(crate) mod provider;
-#[cfg(any(windows, test))]
 pub(crate) mod publication;
 mod staging;
 pub(crate) mod trusted_io;
 
+#[cfg(any(windows, test))]
+pub(crate) use artifacts::QosPolicySpec;
 #[cfg(windows)]
 pub(crate) use artifacts::{
-    MAX_NIC_ROWS, NicAdvancedRow, QosPolicySpec, RegistryBackup, RegistryValue, RscRow,
-    render_registry_export, write_nic_csv,
+    MAX_NIC_ROWS, NicAdvancedRow, RegistryBackup, RegistryValue, RscRow, render_registry_export,
+    write_nic_csv,
 };
 pub(crate) use artifacts::{
     parse_nic_csv, parse_qos_clixml, parse_registry_backup, parse_rsc_csv, parse_tcpip_qos_backup,
@@ -23,36 +23,20 @@ pub use manifest::{
 pub use staging::StagedBackup;
 
 use crate::{Result, TuningError};
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub const MAX_REGISTRY_BYTES: u64 = 1024 * 1024;
 pub const MAX_CSV_BYTES: u64 = 1024 * 1024;
 pub const MAX_QOS_BYTES: u64 = 4 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BundleStatus {
-    Ok,
-    Missing,
-    Invalid,
-    Incompatible,
-}
-
 #[derive(Debug)]
 pub struct BackupBundle {
-    folder: PathBuf,
     manifest: BackupManifest,
     artifacts: BTreeMap<ArtifactKind, Vec<u8>>,
 }
 
 impl BackupBundle {
-    pub fn folder(&self) -> &Path {
-        &self.folder
-    }
     pub fn manifest(&self) -> &BackupManifest {
         &self.manifest
     }
@@ -132,7 +116,6 @@ pub fn validate_backup_bundle(folder: &Path) -> Result<BackupBundle> {
     }
     directory.assert_path()?;
     Ok(BackupBundle {
-        folder: folder.to_path_buf(),
         manifest,
         artifacts,
     })

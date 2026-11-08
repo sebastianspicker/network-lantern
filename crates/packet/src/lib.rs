@@ -330,8 +330,9 @@ pub fn build_tcp_syn_ipv6(
 
 pub fn parse_tcp_response(bytes: &[u8], expected: AddressFamily) -> Result<ParsedTcp, PacketError> {
     need(bytes, 20)?;
+    // Raw IPv6 sockets deliver the bare segment; only IPv4 carries the IP header.
     let (family, source, segment) = match bytes[0] >> 4 {
-        4 => {
+        4 if expected == AddressFamily::Ipv4 => {
             let header_len = usize::from(bytes[0] & 0x0f) * 4;
             if header_len < 20 {
                 return Err(PacketError::Malformed("invalid IPv4 header length"));
@@ -345,22 +346,6 @@ pub fn parse_tcp_response(bytes: &[u8], expected: AddressFamily) -> Result<Parse
                 AddressFamily::Ipv4,
                 Some(IpAddr::V4(source)),
                 &bytes[header_len..],
-            )
-        }
-        6 => {
-            need(bytes, 40)?;
-            let (protocol, offset) = ipv6_transport(bytes)?;
-            if protocol != 6 {
-                return Err(PacketError::Malformed("outer IPv6 packet is not TCP"));
-            }
-            need(bytes, offset + 20)?;
-            let source = std::net::Ipv6Addr::from(
-                <[u8; 16]>::try_from(&bytes[8..24]).expect("fixed IPv6 source slice"),
-            );
-            (
-                AddressFamily::Ipv6,
-                Some(IpAddr::V6(source)),
-                &bytes[offset..],
             )
         }
         _ => (expected, None, bytes),
@@ -891,23 +876,19 @@ mod tests {
         outer.extend_from_slice(&[0xc3, 0x50, 0x01, 0xbb, 0, 0, 0, 9]);
         let parsed = parse_icmp_response(&outer, AddressFamily::Ipv6).unwrap();
         assert!(parsed.correlates(&ProbeKey::tcp(AddressFamily::Ipv6, 50_000, 443, Some(9),)));
+    }
 
-        let mut tcp = build_tcp_syn_ipv6(
-            Ipv6Addr::LOCALHOST,
-            Ipv6Addr::LOCALHOST,
-            &TcpSynSpec {
-                source_port: 443,
-                destination_port: 50_000,
-                sequence: 4,
-                hop_limit: 64,
-                traffic_class: 0,
-                dont_fragment: false,
-            },
-        );
-        tcp[6] = 0;
-        tcp.splice(40..40, [6, 0, 0, 0, 0, 0, 0, 0]);
-        let parsed = parse_tcp_response(&tcp, AddressFamily::Ipv6).unwrap();
+    #[test]
+    fn ipv6_raw_tcp_is_a_bare_segment_even_when_port_looks_like_ip_version() {
+        let mut segment = vec![0u8; 20];
+        segment[..2].copy_from_slice(&0x4000u16.to_be_bytes());
+        segment[2..4].copy_from_slice(&50_000u16.to_be_bytes());
+        segment[13] = 0x12;
+        let parsed = parse_tcp_response(&segment, AddressFamily::Ipv6).unwrap();
+        assert_eq!(parsed.source_port, 0x4000);
         assert_eq!(parsed.destination_port, 50_000);
+        assert!(parsed.syn && parsed.ack && !parsed.rst);
+        assert_eq!(parsed.source, None);
     }
 
     #[test]

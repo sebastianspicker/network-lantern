@@ -12,6 +12,7 @@ use crate::{
         sha256_upper,
         trusted_io::{self, FileIdentity, TrustedDirectory},
     },
+    plan::valid_windows_exe,
     validate_backup_bundle,
 };
 use chrono::Utc;
@@ -83,11 +84,10 @@ const TCPIP_QOS_VALUES: RegistryGroups = &[(TCPIP_QOS, &[("Do not use NLA", true
 pub(super) async fn execute(
     plan: &TuningPlan,
     cancellation: &CancellationToken,
-    inspect_only: bool,
 ) -> Result<TuningResult> {
     let plan = plan.clone();
     let cancellation = cancellation.clone();
-    tokio::task::spawn_blocking(move || execute_sync(&plan, &cancellation, inspect_only))
+    tokio::task::spawn_blocking(move || execute_sync(&plan, &cancellation))
         .await
         .map_err(|error| TuningError::Native {
             operation: "join Windows tuning worker",
@@ -96,25 +96,17 @@ pub(super) async fn execute(
         })?
 }
 
-fn execute_sync(
-    plan: &TuningPlan,
-    cancellation: &CancellationToken,
-    inspect_only: bool,
-) -> Result<TuningResult> {
+fn execute_sync(plan: &TuningPlan, cancellation: &CancellationToken) -> Result<TuningResult> {
     check_cancel(cancellation)?;
     let cim = Session::connect()?;
-    crate::backup::provider::after_inventory(
-        || read_qos(&cim, &[]),
-        |current_qos| {
-            execute_after_qos_inventory(plan, cancellation, inspect_only, &cim, current_qos)
-        },
-    )
+    // Inventory failure must return before any mutation is attempted.
+    let current_qos = read_qos(&cim, &[])?;
+    execute_after_qos_inventory(plan, cancellation, &cim, current_qos)
 }
 
 fn execute_after_qos_inventory(
     plan: &TuningPlan,
     cancellation: &CancellationToken,
-    inspect_only: bool,
     cim: &Session,
     current_qos: Vec<QosPolicySpec>,
 ) -> Result<TuningResult> {
@@ -122,12 +114,9 @@ fn execute_after_qos_inventory(
         .iter()
         .map(|policy| policy.name().into())
         .collect::<Vec<_>>();
-    if inspect_only || plan.config.action == TuningAction::Verify {
-        let mut verification = crate::verification::evaluate(
-            &plan.config,
-            managed_policies,
-            inspect_local_qos_enabled(),
-        );
+    if plan.config.action == TuningAction::Verify {
+        let mut verification =
+            crate::verification::evaluate(&plan.config, &current_qos, inspect_local_qos_enabled());
         verification.backup_folder = Some(backup_folder(plan)?);
         return Ok(verification);
     }
@@ -286,7 +275,12 @@ fn execute_after_qos_inventory(
                 });
                 return Err(TuningError::restore_recovery(error, quarantine, rollback));
             }
-            remove_snapshot(&quarantine)?;
+            if let Err(error) = remove_snapshot(&quarantine) {
+                result.warnings.push(format!(
+                    "Restore succeeded, but the pre-Restore snapshot at {} could not be removed: {error}",
+                    quarantine.display()
+                ));
+            }
         }
         TuningAction::Verify => unreachable!(),
     }
@@ -365,6 +359,7 @@ fn restore_staged(
     for kind in staged.expected_artifacts() {
         check_cancel(cancellation)?;
         staged.verify()?;
+        let mut status = ComponentStatus::Ok;
         match kind {
             ArtifactKind::SystemProfile => restore_registry(crate::backup::parse_registry_backup(
                 &staged.read(kind)?,
@@ -384,10 +379,18 @@ fn restore_staged(
                 reconcile_qos(cim, &current, &desired, &restore_names)?;
             }
             ArtifactKind::NicAdvanced => {
-                restore_nic(cim, &crate::backup::parse_nic_csv(&staged.read(kind)?)?)?
+                status = restore_nic(
+                    cim,
+                    &crate::backup::parse_nic_csv(&staged.read(kind)?)?,
+                    &mut result.warnings,
+                )?
             }
             ArtifactKind::NicRsc => {
-                restore_rsc(cim, &crate::backup::parse_rsc_csv(&staged.read(kind)?)?)?
+                status = restore_rsc(
+                    cim,
+                    &crate::backup::parse_rsc_csv(&staged.read(kind)?)?,
+                    &mut result.warnings,
+                )?
             }
             ArtifactKind::PowerPlan => {
                 let bytes = staged.read(kind)?;
@@ -396,9 +399,7 @@ fn restore_staged(
                 set_power_plan(value.trim())?;
             }
         }
-        result
-            .components
-            .insert(component(kind), ComponentStatus::Ok);
+        result.components.insert(component(kind), status);
     }
     Ok(())
 }
@@ -453,7 +454,7 @@ fn publish_backup(
     ));
     fs::create_dir(&staging).map_err(|source| TuningError::io("create backup staging", source))?;
     let mut staging_guard = OwnedPublicationTree::new(staging.clone())?;
-    protect_directory(&staging)?;
+    protect(&staging)?;
 
     let result = (|| {
         let mut artifacts = BTreeMap::new();
@@ -714,16 +715,6 @@ fn provider_inventory(message: &str) -> TuningError {
     }
 }
 
-fn valid_windows_exe(path: &str) -> bool {
-    path.len() >= 7
-        && path.as_bytes().get(1) == Some(&b':')
-        && path.as_bytes().get(2) == Some(&b'\\')
-        && path.to_ascii_lowercase().ends_with(".exe")
-        && !path.starts_with("\\\\")
-        && !path.starts_with("\\\\?\\")
-        && !path.contains('\0')
-}
-
 fn create_qos(cim: &Session, policy: &QosPolicySpec) -> Result<()> {
     let mut values = vec![
         ("Name", Value::String(policy.name().into())),
@@ -826,7 +817,11 @@ fn disable_nic_power_saving(
     Ok(ComponentStatus::Ok)
 }
 
-fn restore_nic(cim: &Session, desired: &[NicAdvancedRow]) -> Result<()> {
+fn restore_nic(
+    cim: &Session,
+    desired: &[NicAdvancedRow],
+    warnings: &mut Vec<String>,
+) -> Result<ComponentStatus> {
     let rows = cim.query(
         "MSFT_NetAdapterAdvancedPropertySettingData",
         &[
@@ -839,21 +834,19 @@ fn restore_nic(cim: &Session, desired: &[NicAdvancedRow]) -> Result<()> {
         ],
         None,
     )?;
+    let mut skipped = 0;
     for value in desired {
-        let row = rows
-            .iter()
-            .find(|row| {
-                row.string("Name") == Some(value.adapter.as_str())
-                    && ((!value.registry_keyword.is_empty()
-                        && row.string("RegistryKeyword") == Some(value.registry_keyword.as_str()))
-                        || (!value.display_name.is_empty()
-                            && row.string("DisplayName") == Some(value.display_name.as_str())))
-            })
-            .ok_or_else(|| TuningError::Native {
-                operation: "restore NIC property",
-                code: -1,
-                message: format!("property missing for {}", value.adapter),
-            })?;
+        let Some(row) = rows.iter().find(|row| {
+            row.string("Name") == Some(value.adapter.as_str())
+                && ((!value.registry_keyword.is_empty()
+                    && row.string("RegistryKeyword") == Some(value.registry_keyword.as_str()))
+                    || (!value.display_name.is_empty()
+                        && row.string("DisplayName") == Some(value.display_name.as_str())))
+        }) else {
+            // The adapter or property is gone (e.g. backed up docked, restored undocked).
+            skipped += 1;
+            continue;
+        };
         // Unchanged rows are skipped: rewriting resets adapters and would collapse
         // multi-value properties to the single backed-up value.
         if !value.registry_keyword.is_empty() {
@@ -878,20 +871,34 @@ fn restore_nic(cim: &Session, desired: &[NicAdvancedRow]) -> Result<()> {
             )?;
         }
     }
-    Ok(())
+    Ok(skipped_status(skipped, "NIC properties", warnings))
 }
 
-fn restore_rsc(cim: &Session, desired: &[RscRow]) -> Result<()> {
+fn skipped_status(skipped: usize, what: &str, warnings: &mut Vec<String>) -> ComponentStatus {
+    if skipped == 0 {
+        return ComponentStatus::Ok;
+    }
+    warnings.push(format!(
+        "{skipped} backed-up {what} are no longer present and were not restored"
+    ));
+    ComponentStatus::Warn
+}
+
+fn restore_rsc(
+    cim: &Session,
+    desired: &[RscRow],
+    warnings: &mut Vec<String>,
+) -> Result<ComponentStatus> {
     let rows = cim.query("MSFT_NetAdapterRscSettingData", &["__PATH", "Name"], None)?;
+    let mut skipped = 0;
     for value in desired {
-        let row = rows
+        let Some(row) = rows
             .iter()
             .find(|row| row.string("Name") == Some(value.name.as_str()))
-            .ok_or_else(|| TuningError::Native {
-                operation: "restore RSC",
-                code: -1,
-                message: format!("adapter missing: {}", value.name),
-            })?;
+        else {
+            skipped += 1;
+            continue;
+        };
         if value.ipv4_enabled || value.ipv6_enabled {
             cim.invoke(
                 row,
@@ -915,7 +922,7 @@ fn restore_rsc(cim: &Session, desired: &[RscRow]) -> Result<()> {
             )?;
         }
     }
-    Ok(())
+    Ok(skipped_status(skipped, "RSC adapters", warnings))
 }
 
 fn physical_up_adapters(cim: &Session) -> Result<HashSet<String>> {
@@ -1337,9 +1344,6 @@ pub(super) fn staging_parent() -> Result<PathBuf> {
     Ok(staging)
 }
 
-pub(super) fn validate_backup_acl(path: &Path) -> Result<()> {
-    validate_protected(path)
-}
 pub(super) fn validate_backup_parent(path: &Path) -> Result<()> {
     let mut cursor = Some(path);
     while let Some(ancestor) = cursor {
@@ -1366,22 +1370,16 @@ pub(super) fn validate_backup_parent(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn validate_staging_parent(path: &Path) -> Result<()> {
-    validate_staging_chain(path)
-}
-pub(super) fn validate_staging_path(path: &Path) -> Result<()> {
-    validate_staging_chain(path)
-}
 
 fn initialize_protected_directory(path: &Path) -> Result<()> {
     match fs::create_dir(path) {
-        Ok(()) => protect_directory(path),
+        Ok(()) => protect(path),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => validate_protected(path),
         Err(source) => Err(TuningError::io("create restore staging directory", source)),
     }
 }
 
-fn validate_staging_chain(path: &Path) -> Result<()> {
+pub(super) fn validate_staging_chain(path: &Path) -> Result<()> {
     let base = std::env::var_os("ProgramData")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
@@ -1403,14 +1401,7 @@ fn validate_staging_chain(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn protect_directory(path: &Path) -> Result<()> {
-    protect(path)
-}
-pub(super) fn protect_file(path: &Path) -> Result<()> {
-    protect(path)
-}
-
-fn protect(path: &Path) -> Result<()> {
+pub(super) fn protect(path: &Path) -> Result<()> {
     reject_reparse(path)?;
     let sddl = wide("O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)");
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -1478,7 +1469,7 @@ fn protect(path: &Path) -> Result<()> {
     validate_protected(path)
 }
 
-fn validate_protected(path: &Path) -> Result<()> {
+pub(super) fn validate_protected(path: &Path) -> Result<()> {
     reject_reparse(path)?;
     let mut descriptor = std::ptr::null_mut();
     let status = unsafe {
@@ -1716,7 +1707,7 @@ impl DurableFile for ProtectedBackupFile {
     }
 
     fn protect(&mut self) -> Result<()> {
-        protect_file(&self.path)?;
+        protect(&self.path)?;
         let identity = trusted_io::file_identity(
             self.file.as_ref().expect("backup file is writable"),
             "identify written backup file",

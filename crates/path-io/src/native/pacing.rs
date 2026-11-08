@@ -79,7 +79,7 @@ where
     F: Fn(I, &CancellationToken) -> Result<T, ProbeError> + Sync,
 {
     assert!(max_outstanding > 0);
-    let max_outstanding = clamp_outstanding(max_outstanding, descriptor_limit());
+    let max_outstanding = clamp_to_descriptor_limit(max_outstanding);
     let worker_cancellation = cancellation.child_token();
     let mut completed = Vec::new();
     let mut failure = None;
@@ -178,6 +178,11 @@ fn clamp_outstanding(max_outstanding: usize, limit: Option<u64>) -> usize {
     };
     let budget = limit.saturating_sub(RESERVED_DESCRIPTORS) / DESCRIPTORS_PER_PROBE;
     max_outstanding.min(usize::try_from(budget).unwrap_or(usize::MAX).max(1))
+}
+
+/// Cap `max_outstanding` to what the (raised) soft descriptor limit can hold.
+pub fn clamp_to_descriptor_limit(max_outstanding: usize) -> usize {
+    clamp_outstanding(max_outstanding, descriptor_limit())
 }
 
 /// Raise the soft `RLIMIT_NOFILE` toward `min(hard, 4096)` once per process and
@@ -346,5 +351,13 @@ mod tests {
         assert!(matches!(result.failure, Some(ProbeError::Io { .. })));
         assert_eq!(stopped.load(Ordering::SeqCst), 3);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn outstanding_probes_fit_the_descriptor_limit() {
+        assert_eq!(clamp_outstanding(512, None), 512);
+        assert_eq!(clamp_outstanding(512, Some(256)), 64);
+        assert_eq!(clamp_outstanding(512, Some(4096)), 512);
+        assert_eq!(clamp_outstanding(512, Some(10)), 1);
     }
 }

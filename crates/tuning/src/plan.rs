@@ -115,7 +115,7 @@ fn validate(config: &TuningConfig) -> Result<()> {
                 "application paths must not contain parent traversal".into(),
             ));
         }
-        if !valid_windows_exe(path) {
+        if !valid_windows_exe(&path.to_string_lossy()) {
             return Err(TuningError::Validation(
                 "application paths must be absolute local .exe paths".into(),
             ));
@@ -129,6 +129,20 @@ fn validate(config: &TuningConfig) -> Result<()> {
     {
         return Err(TuningError::Validation(
             "backupFolder must not be empty".into(),
+        ));
+    }
+    // A relative folder would make the SYSTEM helper stage in its own working directory.
+    if config.action != TuningAction::Verify
+        && config.backup_folder.as_ref().is_some_and(|path| {
+            let bytes = path.as_os_str().as_encoded_bytes();
+            !(bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'\\' | b'/'))
+        })
+    {
+        return Err(TuningError::Validation(
+            r"backupFolder must be an absolute drive path such as C:\Backups".into(),
         ));
     }
     if config.action != TuningAction::Verify
@@ -157,15 +171,14 @@ fn validate(config: &TuningConfig) -> Result<()> {
     Ok(())
 }
 
-fn valid_windows_exe(path: &std::path::Path) -> bool {
-    let value = path.as_os_str().to_string_lossy();
+/// One rule for planning and for reading policies back: a `/` path that passed
+/// planning but not the reader would make every later QoS read fail.
+pub(crate) fn valid_windows_exe(value: &str) -> bool {
     value.len() >= 7
         && value.as_bytes()[0].is_ascii_alphabetic()
         && value.as_bytes().get(1) == Some(&b':')
-        && matches!(value.as_bytes().get(2), Some(b'\\' | b'/'))
+        && value.as_bytes().get(2) == Some(&b'\\')
         && value.to_ascii_lowercase().ends_with(".exe")
-        && !value.starts_with("\\\\")
-        && !value.starts_with("\\\\?\\")
         && !value.contains('\0')
 }
 
@@ -231,6 +244,12 @@ mod tests {
                 app_paths: vec!["relative.exe".into()],
                 ..Default::default()
             },
+            // The QoS reader accepts only `\`, so a `/` policy would block every later read.
+            TuningConfig {
+                include_app_policies: true,
+                app_paths: vec!["C:/Games/cs2.exe".into()],
+                ..Default::default()
+            },
             TuningConfig {
                 backup_folder: Some(r"C:\Windows\Temp\Lantern".into()),
                 ..Default::default()
@@ -243,9 +262,22 @@ mod tests {
                 backup_folder: Some(r"C:\ProgramData\safe\..\other".into()),
                 ..Default::default()
             },
+            TuningConfig {
+                backup_folder: Some("Lantern".into()),
+                allow_unsafe_backup_folder: true,
+                ..Default::default()
+            },
         ] {
             assert!(matches!(plan(&config), Err(TuningError::Validation(_))));
         }
+        // Forward slashes are still an absolute drive path on Windows.
+        assert!(
+            plan(&TuningConfig {
+                backup_folder: Some("C:/Backups/Lantern".into()),
+                ..Default::default()
+            })
+            .is_ok()
+        );
         assert!(
             plan(&TuningConfig {
                 backup_folder: Some(r"C:\Windows\Temp\Lantern".into()),

@@ -37,6 +37,28 @@ fn has_explicit_hosts(value: &Value) -> bool {
         _ => false,
     }
 }
+/// Hosts given in the request: host lists anywhere, or a path `target` (`--target`).
+fn explicit_hosts(request: &Value) -> bool {
+    let Some(layers) = request.get("layers") else {
+        return false;
+    };
+    let workflow = request.get("capability").and_then(Value::as_str) == Some("workflow");
+    has_explicit_hosts(layers)
+        || layers.as_array().into_iter().flatten().any(|layer| {
+            let path = if workflow {
+                layer.as_object().and_then(|sections| {
+                    sections
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("path"))
+                        .map(|(_, path)| path)
+                })
+            } else {
+                Some(layer)
+            };
+            path.and_then(|path| path.get("target"))
+                .is_some_and(Value::is_string)
+        })
+}
 /// Path capabilities and the workflows with a path step probe hosts; the others never do.
 fn uses_hosts(request: &Value) -> bool {
     match request.get("capability").and_then(Value::as_str) {
@@ -79,7 +101,7 @@ fn with_hosts_file(
             )));
         }
         let mut warnings = Vec::new();
-        if uses_hosts(request) && !request.get("layers").is_some_and(has_explicit_hosts) {
+        if uses_hosts(request) && !explicit_hosts(request) {
             let cwd = std::env::current_dir()
                 .map(|dir| dir.display().to_string())
                 .unwrap_or_else(|_| "the working directory".into());
@@ -109,11 +131,7 @@ fn with_hosts_file(
         }
     }
     let mut warnings = Vec::new();
-    if hosts4.is_empty()
-        && hosts6.is_empty()
-        && uses_hosts(request)
-        && !request.get("layers").is_some_and(has_explicit_hosts)
-    {
+    if hosts4.is_empty() && hosts6.is_empty() && uses_hosts(request) && !explicit_hosts(request) {
         warnings.push(format!(
             "{} lists no ipv4=/ipv6= hosts; using built-in default hosts",
             path.display()
@@ -175,6 +193,26 @@ mod tests {
                 .unwrap()
                 .1
                 .is_empty()
+        );
+        // `--target` replaces the host list, so the default-hosts warning is wrong there.
+        for targeted in [
+            json!({"capability":"path_basic","layers":[{"target":"192.0.2.1"}]}),
+            json!({"capability":"workflow","workflow":"path","layers":[{"Path":{"target":"192.0.2.1"}}]}),
+        ] {
+            assert!(
+                with_hosts_file(&targeted, None, &path)
+                    .unwrap()
+                    .1
+                    .is_empty()
+            );
+        }
+        let throughput_only = json!({"capability":"workflow","workflow":"triage","layers":[{"throughput":{"target":"192.0.2.1"}}]});
+        assert_eq!(
+            with_hosts_file(&throughput_only, None, &path)
+                .unwrap()
+                .1
+                .len(),
+            1
         );
         std::fs::write(&path, "# empty\nunknown=ignored").unwrap();
         assert_eq!(

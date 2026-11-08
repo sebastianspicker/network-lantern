@@ -106,6 +106,11 @@ pub async fn preflight_check(
                 return Err(cancelled());
             }
             let size = *size;
+            if address.is_ipv6() {
+                // Don't-fragment is only set for IPv4, so an oversized IPv6 probe would be fragmented locally and falsely succeed.
+                mtu.push(json!({"payload_size":size,"succeeded":false,"error":"MTU probing is not supported for IPv6 targets"}));
+                continue;
+            }
             let token = child.clone();
             let result = tokio::task::spawn_blocking(move || {
                 lantern_path_io::ping(
