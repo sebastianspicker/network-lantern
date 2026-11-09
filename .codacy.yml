@@ -2,3 +2,8 @@
 exclude_paths:
   - "package-lock.json"
   - "**/package-lock.json"
+engines:
+  lizard:
+    # Generated lockfile; kept out of Lizard only so Trivy still scans it.
+    exclude_paths:
+      - "Cargo.lock"
