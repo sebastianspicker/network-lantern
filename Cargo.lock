@@ -3970,15 +3970,14 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-wdio"
-version = "1.4.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31661003aae37f068d12c3a931cff3c1f0cbd6965651a68ed310c8e44636edb9"
+checksum = "b9bd7c010be21e8f7011f7249fdb0a5921cd6c2beafeb15482b92c58b70757e0"
 dependencies = [
  "log",
  "serde",
  "serde_json",
  "tauri",
- "tauri-build",
  "tauri-plugin",
  "thiserror 1.0.69",
  "tokio",
